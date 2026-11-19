@@ -1,0 +1,170 @@
+{
+ "note": "Sticker colours of the five reference photos, read by eye from the rectified crops (tmp/vision/real/*-faces.png). Each photo lists its three sampled faces [top, left, right] in the sampleCornerShot orientation, six rows of six letters. views says which cube face each one is once the orange face is called U and photo 1 is taken as the URF corner.",
+ "photos": {
+  "cube-corner-1": {
+   "view": {
+    "top": 0,
+    "left": 2,
+    "right": 1
+   },
+   "faces": [
+    [
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO"
+    ],
+    [
+     "GGGGGG",
+     "GWYRGY",
+     "GGRGRR",
+     "BYYGYB",
+     "BGRBYR",
+     "RYGGWR"
+    ],
+    [
+     "WWWWWW",
+     "BBWWYY",
+     "WWYYBG",
+     "RYBWYY",
+     "GYBWWG",
+     "WBYBGR"
+    ]
+   ]
+  },
+  "cube-corner-2": {
+   "view": {
+    "top": 0,
+    "left": 4,
+    "right": 2
+   },
+   "faces": [
+    [
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO"
+    ],
+    [
+     "YYYYYY",
+     "YWRWBY",
+     "RGWRYY",
+     "YGWBRR",
+     "RRYRGW",
+     "RGBBBY"
+    ],
+    [
+     "GGGGGG",
+     "GWYRGY",
+     "GGRGRR",
+     "BYYGYB",
+     "BGRBYR",
+     "RYGGWR"
+    ]
+   ]
+  },
+  "cube-corner-3": {
+   "view": {
+    "top": 5,
+    "left": 3,
+    "right": 4
+   },
+   "faces": [
+    [
+     "BBBBBB",
+     "RBGYGB",
+     "WBWBGW",
+     "RBYGWB",
+     "RRGBRY",
+     "GBRWRG"
+    ],
+    [
+     "WWYGWY",
+     "WBWBYW",
+     "WRRBRW",
+     "GGGRBY",
+     "RRGWWR",
+     "BRRRGB"
+    ],
+    [
+     "RRYRYY",
+     "GRGGWY",
+     "BYWWRY",
+     "BRBRWY",
+     "BGRYBY",
+     "YWRYYY"
+    ]
+   ]
+  },
+  "cube-corner-4": {
+   "view": {
+    "top": 4,
+    "left": 3,
+    "right": 2
+   },
+   "faces": [
+    [
+     "YYYYYY",
+     "YWRWBY",
+     "RGWRYY",
+     "YGWBRR",
+     "RRYRGW",
+     "RGBBBY"
+    ],
+    [
+     "YWWYRB",
+     "WYRBWG",
+     "GBBRWR",
+     "YWRGGR",
+     "WBRGRR",
+     "WWWGRB"
+    ],
+    [
+     "RBBGGG",
+     "YGYGWG",
+     "GRYRYG",
+     "GBGGRG",
+     "WYYRGG",
+     "RRBRYG"
+    ]
+   ]
+  },
+  "cube-corner-5": {
+   "view": {
+    "top": 0,
+    "left": 1,
+    "right": 5
+   },
+   "faces": [
+    [
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO",
+     "OOOOOO"
+    ],
+    [
+     "WWWWWW",
+     "BBWWYY",
+     "WWYYBG",
+     "RYBWYY",
+     "GYBWWG",
+     "WBYBGR"
+    ],
+    [
+     "BBBBBB",
+     "RBGYGB",
+     "WBWBGW",
+     "RBYGWB",
+     "RRGBRY",
+     "GBRWRG"
+    ]
+   ]
+  }
+ }
+}
