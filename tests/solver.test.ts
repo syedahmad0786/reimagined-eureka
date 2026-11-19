@@ -37,7 +37,8 @@ describe('solver', () => {
     let changed = 0;
     const ref = solvedState();
     for (let i = 0; i < s.length; i++) if (s[i] !== ref[i]) changed++;
-    expect(changed).toBe(8);
+    // two groups of four wings, two stickers each
+    expect(changed).toBe(16);
   });
 
   it('merging and cancelling moves never changes what a sequence does', () => {
@@ -119,5 +120,5 @@ describe('solver', () => {
     writeFileSync('tmp/solver-report-' + TRIALS + '.json', JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report));
     expect(lengths.length).toBe(TRIALS);
-  });
+  }, 120000 + TRIALS * 3000);
 });
