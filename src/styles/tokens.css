@@ -1,0 +1,35 @@
+/* Design tokens shared by every screen and component. Phone first: portrait, one-handed, thumb reach. */
+:root {
+  color-scheme: dark;
+  --bg: #0d1015;
+  --surface: #161a21;
+  --surface-2: #1e232c;
+  --surface-3: #283040;
+  --border: #2c3440;
+  --text: #eef1f5;
+  --text-dim: #9ba6b5;
+  --accent: #5aa2ff;
+  --accent-strong: #2f7fec;
+  --accent-ink: #051120;
+  --ok: #3ecf8e;
+  --warn: #f5b942;
+  --bad: #ff6464;
+  --highlight: #7df9ff;
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  --gap: 12px;
+  --tap: 52px; /* minimum touch target */
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Default sticker colours, used when the scan does not supply its own. */
+  --sticker-white: #f3f3ef;
+  --sticker-yellow: #ffd41f;
+  --sticker-red: #d92b2b;
+  --sticker-orange: #ff8a1c;
+  --sticker-blue: #1f6fe0;
+  --sticker-green: #2dbd4e;
+  --sticker-unknown: #4a5361;
+  --cube-plastic: #0b0c0f;
+}
