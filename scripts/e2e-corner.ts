@@ -35,7 +35,9 @@ for (const dirArg of args) {
   const name = basename(dir);
   const truth = (JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')) as { state: number[] }).state;
   // Start as a first-time visitor: a saved session would reopen the last screen instead of home.
-  await page.goto(url);
+  // The stores are cleared from a page of the same site that does not run the app, because the app
+  // saves its session again once it has finished reopening the last one.
+  await page.goto(new URL('icon.svg', url).href);
   await page.evaluate(
     () =>
       new Promise<void>((done) => {
