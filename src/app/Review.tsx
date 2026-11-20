@@ -5,6 +5,7 @@ import { validateState, type Suggestion } from '../cube/validate';
 import { imageDataToCanvas, rectifyFace } from '../vision';
 import { CAPTURE_STEPS, FACE_TITLES, NEIGHBOURS, type CubeData } from './model';
 import type { SolverClient } from './solver-client';
+import { Icon, Pulse } from './ui';
 
 interface Props {
   data: CubeData;
@@ -16,7 +17,7 @@ interface Props {
   onBack: () => void;
 }
 
-const UNKNOWN = '#4a5361';
+const UNKNOWN = '#544858';
 const FACE_ORDER = CAPTURE_STEPS.map((s) => s.face);
 
 export function Review({ data, client, solving, solveError, onChange, onSolve, onBack }: Props) {
@@ -28,6 +29,8 @@ export function Review({ data, client, solving, solveError, onChange, onSolve, o
   const undo = useRef<Uint8Array[]>([]);
   const [undoCount, setUndoCount] = useState(0);
   const painting = useRef(false);
+  const [allNotes, setAllNotes] = useState(false);
+  const [leaving, setLeaving] = useState(false);
 
   const validation = useMemo(() => validateState(state, names), [state]);
   const counts = useMemo(() => colourCounts(state), [state]);
@@ -95,13 +98,55 @@ export function Review({ data, client, solving, solveError, onChange, onSolve, o
   const around = NEIGHBOURS[face] as number[];
   const hasUnknown = validation.problems.some((p) => p.kind === 'unknown');
 
+  // What is wrong and how to mend it sit straight under the faces, the first problem and the likeliest fix first.
+  const problemNote = (p: (typeof validation.problems)[number]) => (
+    <div class="note bad" data-testid="problem">
+      <p>{p.message}</p>
+      {p.facelets.length > 0 && !hasUnknown && (
+        <button class="btn small" onClick={() => setFace(Math.floor((p.facelets.find((f) => Math.floor(f / NN) !== face) ?? (p.facelets[0] as number)) / NN))}>
+          Show {p.facelets.length === 1 ? 'it' : 'them'} (marked with !)
+        </button>
+      )}
+      {hasUnknown && (
+        <button class="btn small" onClick={() => setFace(Math.floor((p.facelets[0] as number) / NN))}>
+          Go to the first one
+        </button>
+      )}
+    </div>
+  );
+  const several = suggestions.length > 1 && suggestions.every((s) => s.solves);
+  const fixNote = (s: Suggestion) => (
+    <div class="note fix" data-testid="suggestion">
+      <p>
+        <b>{s.solves ? 'Likely fix: ' : 'Would help: '}</b>
+        {s.description}
+        {several && ' Compare with your cube first: each fix on its own gives a real cube.'}
+      </p>
+      <div class="row">
+        {s.changes[0] && (
+          <button class="btn small" onClick={() => setFace(Math.floor((s.changes[0] as Suggestion['changes'][number]).facelet / NN))}>
+            Show
+          </button>
+        )}
+        <button class="btn small" onClick={() => apply(s)} data-testid="apply">
+          Apply
+        </button>
+      </div>
+    </div>
+  );
+  const [firstProblem, ...otherProblems] = validation.problems;
+  const notes = firstProblem ? [problemNote(firstProblem), ...suggestions.map(fixNote), ...otherProblems.map(problemNote)] : [];
+
   return (
     <div class="screen review">
       <header class="bar">
-        <button class="btn ghost" onClick={onBack}>
-          Back
+        <button class="btn ghost icon" onClick={() => (undoCount > 0 || data.photos ? setLeaving(true) : onBack())} aria-label="Back to the start" data-testid="review-back">
+          <Icon name="back" />
         </button>
-        <div class="bar-title">Check the colours</div>
+        <div class="bar-title">
+          Check the colours
+          <small>{FACE_TITLES[face]} side</small>
+        </div>
         <button
           class="btn ghost"
           disabled={!undoCount}
@@ -111,6 +156,7 @@ export function Review({ data, client, solving, solveError, onChange, onSolve, o
             if (prev) onChange(prev);
           }}
         >
+          <Icon name="undo" />
           Undo
         </button>
       </header>
@@ -131,6 +177,30 @@ export function Review({ data, client, solving, solveError, onChange, onSolve, o
           );
         })}
       </nav>
+
+      <section class="checks" aria-live="polite">
+        {validation.ok ? (
+          <p class="note ok" data-testid="valid">
+            <span>
+              <b>This is a real cube.</b> 36 stickers of each colour, and the corners, edges and centres all fit together.
+            </span>
+          </p>
+        ) : (
+          <>
+            {notes.slice(0, allNotes ? notes.length : 2)}
+            {notes.length > 2 && (
+              <button class="link" onClick={() => setAllNotes(!allNotes)} data-testid="more-notes">
+                {allNotes ? 'Show fewer' : 'Show ' + (notes.length - 2) + ' more'}
+              </button>
+            )}
+          </>
+        )}
+        {solveError && (
+          <p class="note bad" role="alert">
+            {solveError}
+          </p>
+        )}
+      </section>
 
       <section class="board">
         <div class="edge-label">{FACE_TITLES[around[0] as number]} side here</div>
@@ -171,7 +241,7 @@ export function Review({ data, client, solving, solveError, onChange, onSolve, o
         <div class="edge-label">{FACE_TITLES[around[2] as number]} side here</div>
       </section>
 
-      <section class="palette" aria-label="Colour to paint with">
+      <section class="tray palette" aria-label="Colour to paint with">
         {palette.map((p, c) => (
           <button class={'swatch' + (c === colour ? ' on' : '')} style={{ background: p }} onClick={() => setColour(c)} aria-pressed={c === colour} aria-label={names[c] + ', ' + counts[c] + ' of 36'} data-testid={'swatch-' + c}>
             <span class={counts[c] === 36 ? 'ok' : 'off'}>{counts[c]}</span>
@@ -194,56 +264,28 @@ export function Review({ data, client, solving, solveError, onChange, onSolve, o
         )}
       </div>
 
-      <section class="checks" aria-live="polite">
-        {validation.ok ? (
-          <p class="note ok" data-testid="valid">
-            This is a real cube state: 36 stickers of each colour, and the corners, edges and centres all fit together.
-          </p>
-        ) : (
-          <>
-            {validation.problems.map((p) => (
-              <div class="note bad" data-testid="problem">
-                <p>{p.message}</p>
-                {p.facelets.length > 0 && !hasUnknown && (
-                  <button class="btn small" onClick={() => setFace(Math.floor((p.facelets.find((f) => Math.floor(f / NN) !== face) ?? (p.facelets[0] as number)) / NN))}>
-                    Show {p.facelets.length === 1 ? 'it' : 'them'} (outlined in red)
-                  </button>
-                )}
-                {hasUnknown && (
-                  <button class="btn small" onClick={() => setFace(Math.floor((p.facelets[0] as number) / NN))}>
-                    Go to the first one
-                  </button>
-                )}
-              </div>
-            ))}
-            {suggestions.length > 1 && suggestions.every((s) => s.solves) && (
-              <p class="hint">Each of these changes on its own gives a real cube state{data.costs ? ', most likely first' : ''}. Compare with your cube before applying one.</p>
-            )}
-            {suggestions.map((s) => (
-              <div class="note fix" data-testid="suggestion">
-                <p>
-                  <b>{s.solves ? 'Likely fix: ' : 'Would help: '}</b>
-                  {s.description}
-                </p>
-                <button class="btn small primary" onClick={() => apply(s)}>
-                  Apply
-                </button>
-              </div>
-            ))}
-          </>
-        )}
-        {solveError && (
-          <p class="note bad" role="alert">
-            {solveError}
-          </p>
-        )}
-      </section>
-
       <footer class="actions sticky">
         <button class="btn primary grow big" disabled={!validation.ok || !!solving} onClick={onSolve} data-testid="solve">
-          {solving || (validation.ok ? 'Solve' : hasUnknown ? 'Colour every sticker to solve' : 'Fix the marked stickers to solve')}
+          {solving && <Pulse />}
+          {solving || (validation.ok ? 'Solve this cube' : hasUnknown ? 'Colour every sticker to solve' : 'Fix the marked stickers to solve')}
         </button>
       </footer>
+      {leaving && (
+        <div class="sheet-back" onClick={() => setLeaving(false)}>
+          <div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="leave-title" onClick={(e) => e.stopPropagation()}>
+            <h2 id="leave-title">Leave this cube?</h2>
+            <p>{data.photos ? 'The scan and any colours you fixed will be thrown away.' : 'The colours you entered will be thrown away.'}</p>
+            <div class="actions">
+              <button class="btn big grow" onClick={onBack} data-testid="leave">
+                Throw it away
+              </button>
+              <button class="btn primary big grow" onClick={() => setLeaving(false)} data-testid="stay">
+                Keep checking
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

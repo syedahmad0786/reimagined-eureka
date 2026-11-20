@@ -65,7 +65,12 @@ export function analyseReduced(state: ArrayLike<number>): ReducedInfo {
   };
 }
 
-/** Swaps the top-front and top-back edge groups; centres, corners and all other edges stay put. */
+/**
+ * Changes the parity of the edge groups against the corners, which is all the solver needs from it:
+ * it swaps the top-left and top-right edge groups and the top corners diagonally (the same as swapping
+ * the top-front and top-back groups and then giving the top a half turn). Centres stay whole and every
+ * other edge group stays paired. tests/learn.test.ts checks this piece by piece.
+ */
 export const PLL_PARITY_FIX: Move[] = parseMoves('2-3Rw2 U2 2-3Rw2 3Uw2 2-3Rw2 3Uw2');
 
 /** Outer-turn solution of the reduced cube. The reduced cube must be a valid 3x3x3 state. */

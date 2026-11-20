@@ -46,10 +46,13 @@ await snap('home');
 
 // 1. Six photos, in capture order.
 await page.setInputFiles('[data-testid=files]', ORDER.map((f) => [join(cubeDir, f + '.jpg'), join(cubeDir, f + '.png')].find(existsSync) as string));
+const outlineUnsure: boolean[] = [];
 for (let i = 0; i < 6; i++) {
   await page.waitForSelector('[data-testid=use-photo]');
+  await page.waitForFunction((n) => document.querySelector('.bar-title')?.textContent?.includes('Photo ' + n + ' of 6'), i + 1);
   await page.waitForTimeout(i === 0 ? 1200 : 700);
-  if (i === 0 || i === 4) await snap('outline-' + ORDER[i]);
+  outlineUnsure.push((await page.$('[data-testid=unsure]')) !== null);
+  if (i === 0 || i === 4) await snap('read-' + ORDER[i]);
   await page.click('[data-testid=use-photo]');
 }
 
@@ -99,6 +102,7 @@ try {
   // no suggestion in time: repaint by hand below
 }
 await page.evaluate(() => window.scrollTo(0, 0));
+await page.click('[data-testid=face-2]');
 await snap('wrong-sticker');
 await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
 await snap('wrong-sticker-messages');
@@ -148,6 +152,13 @@ const afterAuto = Number((await counter()).match(/Step (\d+)/)?.[1]);
 // 6. Next, one step at a time, to the end.
 const seenPhases = new Set<string>();
 for (let k = afterAuto; k <= total; k++) {
+  // A new phase opens with a note; the same button carries on.
+  if (await page.$('[data-testid=phase-note]')) {
+    await page.waitForTimeout(300);
+    await snap('note-' + ((await page.textContent('[data-testid=phase-note] h3')) ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+    await page.click('[data-testid=next]');
+    await page.waitForSelector('[data-testid=notation]');
+  }
   notations.push((await page.textContent('[data-testid=notation]')) ?? '');
   const phase = (await page.textContent('[data-testid=phase]')) ?? '';
   phases.push(phase);
@@ -159,8 +170,11 @@ for (let k = afterAuto; k <= total; k++) {
   if (k < total) await page.waitForFunction((n) => document.querySelector('[data-testid=counter]')?.textContent?.replace(/\s+/g, ' ').includes('Step ' + n + ' '), k + 1, { timeout: 30000 });
 }
 await page.waitForSelector('[data-testid=done]', { timeout: 30000 });
-await page.waitForTimeout(600);
+await page.waitForTimeout(900);
+await snap('solved-confetti');
+await page.waitForTimeout(5000);
 await snap('solved');
+const stats = { steps: await page.textContent('[data-testid=stat-steps]').catch(() => null), time: await page.textContent('[data-testid=stat-time]').catch(() => null) };
 const finalState = await page.evaluate(() => Array.from((window as unknown as { __cubeView: { getState(): Uint8Array } }).__cubeView.getState()));
 let solved = true;
 for (let f = 0; f < 6; f++) for (let i = 1; i < 36; i++) if (finalState[f * 36 + i] !== finalState[f * 36]) solved = false;
@@ -177,7 +191,8 @@ const result = {
   view: viewName,
   viewport,
   cube: cubeDir.split('/').slice(-1)[0],
-  scan: { wrongStickersBeforeCorrection: wrong.length, of: 216, validBeforeCorrection: validBefore, problemsBeforeCorrection: problemsBefore },
+  scan: { wrongStickersBeforeCorrection: wrong.length, of: 216, validBeforeCorrection: validBefore, problemsBeforeCorrection: problemsBefore, outlineUnsure },
+  stats,
   deliberateError: { problems: problemsBroken, suggestion },
   solve: { steps: total, clickToFirstStepMs: solveMs, phases: Array.from(seenPhases) },
   controlsOk,

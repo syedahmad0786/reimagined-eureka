@@ -1,27 +1,57 @@
-/* Design tokens shared by every screen and component. Phone first: portrait, one-handed, thumb reach. */
+/*
+ * Design tokens shared by every screen and component. Phone first: portrait, one-handed, thumb reach.
+ * See DESIGN.md. The cube owns six colours, so the interface is drawn in the one hue family that is
+ * not on a cube (grape and pink) plus black plastic; red, green and yellow never carry interface meaning.
+ */
+@font-face {
+  font-family: 'Rubik Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 900;
+  src: url('../../node_modules/@fontsource-variable/rubik/files/rubik-latin-wght-normal.woff2') format('woff2-variations');
+}
+
 :root {
   color-scheme: dark;
-  --bg: #0d1015;
-  --surface: #161a21;
-  --surface-2: #1e232c;
-  --surface-3: #283040;
-  --border: #2c3440;
-  --text: #eef1f5;
-  --text-dim: #9ba6b5;
-  --accent: #5aa2ff;
-  --accent-strong: #2f7fec;
-  --accent-ink: #051120;
-  --ok: #3ecf8e;
-  --warn: #f5b942;
-  --bad: #ff6464;
-  --highlight: #7df9ff;
 
-  --radius: 14px;
-  --radius-sm: 9px;
+  /* The mat the cube sits on, from the deepest to the most raised. */
+  --bg-deep: #1e0925;
+  --bg: #34133e;
+  --surface: #462052;
+  --surface-2: #5a2e67;
+  --surface-3: #6f3e7e;
+  --border: #7d4d8c;
+  --pool: #8a4f9c;
+
+  --text: #faf4fc;
+  --text-dim: #dec8e5;
+  --paper: #f4e5f9;
+
+  /* The signal colour: whatever the app points at, and the one thing to press. */
+  --accent: #ff63dc;
+  --accent-strong: #e741c4;
+  --accent-soft: #ffb5ea;
+  --accent-ink: #120616;
+  --highlight: #ff63dc;
+
+  /* States stay inside the family and are always paired with a word or a mark. */
+  --ok: #ffb5ea;
+  --warn: #f4e5f9;
+  --bad: #ff63dc;
+
+  --radius: 20px;
+  --radius-sm: 14px;
+  --radius-xs: 8px;
   --gap: 12px;
   --tap: 52px; /* minimum touch target */
-  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font: 'Rubik Variable', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --quick: 120ms;
+  --smooth: 240ms;
+  --slow: 480ms;
 
   /* Default sticker colours, used when the scan does not supply its own. */
   --sticker-white: #f3f3ef;
@@ -30,6 +60,9 @@
   --sticker-orange: #ff8a1c;
   --sticker-blue: #1f6fe0;
   --sticker-green: #2dbd4e;
-  --sticker-unknown: #4a5361;
-  --cube-plastic: #0b0c0f;
+  --sticker-unknown: #544858;
+  --cube-plastic: #0b0a0d;
+  --cube-arrow: #ff3fd0;
+  --cube-arrow-edge: #120616;
+  --cube-outline: #ffe3f8;
 }

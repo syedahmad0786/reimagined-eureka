@@ -11,6 +11,9 @@ importers:
 
   .:
     dependencies:
+      '@fontsource-variable/rubik':
+        specifier: ^5.3.0
+        version: 5.3.0
       cubejs:
         specifier: ^1.3.2
         version: 1.3.2(patch_hash=984816aa90074186eed27d42fa1592719437f8ae757d290fe72821da28d9ae3d)
@@ -378,6 +381,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@fontsource-variable/rubik@5.3.0':
+    resolution: {integrity: sha512-yQUf8qle24MJYA+EuauyF+cqjjN6I715nGjitt3sGmwZA0XfA4fWJcLq1C/diREZl4Qzn1E80nLMc0ipC/a4Lg==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -1973,6 +1979,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.2':
     optional: true
+
+  '@fontsource-variable/rubik@5.3.0': {}
 
   '@img/colour@1.1.0': {}
 
