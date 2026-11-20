@@ -268,7 +268,7 @@ export function Solve({ data, steps, startAt, startMs, onStep, onExit, onAgain, 
   );
 
   return (
-    <div class="screen solve">
+    <div class={'screen solve' + (gate ? ' noting' : '')}>
       <header class="bar">
         <button class="btn ghost" onClick={onExit} data-testid="exit">
           <Icon name="back" />
@@ -434,6 +434,7 @@ export function Solve({ data, steps, startAt, startMs, onStep, onExit, onAgain, 
 
           <input
             class="scrub"
+            hidden={!!gate}
             type="range"
             min={0}
             max={n}
@@ -443,7 +444,7 @@ export function Solve({ data, steps, startAt, startMs, onStep, onExit, onAgain, 
             onInput={(e) => leap(Number((e.target as HTMLInputElement).value))}
           />
 
-          <div class="controls">
+          <div class="controls" hidden={!!gate}>
             <button class="btn stack" onClick={() => leap(0)} disabled={index === 0} data-testid="start">
               <Icon name="restart" />
               Restart

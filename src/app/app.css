@@ -175,6 +175,8 @@ html, .layer { scrollbar-color: var(--surface-3) transparent; }
 .phase-chip.now { background: var(--paper); color: var(--accent-ink); font-weight: 750; }
 .phase-chip.skip { opacity: 0.5; }
 .stage { flex: 1; min-height: 200px; border-radius: var(--radius); overflow: hidden; }
+/* While a phase note is being read the slider and the small controls step aside, so the note and the big button both fit. */
+.solve.noting .stage { min-height: 120px; }
 .stage-cube { position: absolute; inset: 0; }
 .recentre { position: absolute; right: 4px; top: 4px; opacity: 0.9; }
 .intro { background: var(--surface); border-radius: var(--radius); padding: 18px; display: grid; gap: 14px; font-size: 17px; }
@@ -204,7 +206,7 @@ html, .layer { scrollbar-color: var(--surface-3) transparent; }
 .solve .actions.sticky { margin-top: 0; padding-top: 6px; background: none; position: static; }
 .solve .btn.next { min-height: 76px; font-size: 23px; font-weight: 750; border-radius: var(--radius); }
 .solve .btn.back { min-height: 76px; width: 76px; border-radius: var(--radius); flex: none; }
-.phase-note { background: var(--surface); border-radius: var(--radius-sm); padding: 12px 14px; display: grid; gap: 6px; font-size: 16px; animation: note-in var(--smooth) var(--ease-out); max-height: 38dvh; overflow-y: auto; }
+.phase-note { background: var(--surface); border-radius: var(--radius-sm); padding: 12px 14px; display: grid; gap: 6px; font-size: 16px; animation: note-in var(--smooth) var(--ease-out); max-height: 42dvh; overflow-y: auto; }
 .phase-note h3 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 @keyframes note-in { from { opacity: 0; transform: translateY(6px); } }
 
@@ -269,8 +271,15 @@ html, .layer { scrollbar-color: var(--surface-3) transparent; }
 .side { display: flex; flex-direction: column; gap: 8px; }
 
 @media (max-height: 620px) {
-  .stage { min-height: 110px; }
+  .stage { min-height: 84px; }
+  .solve.noting .stage { min-height: 84px; }
+  .phase-note { max-height: 32dvh; }
   .move { min-height: 0; }
+}
+
+@media (max-width: 350px) {
+  .solve .btn.next { font-size: 19px; }
+  .bar-title { font-size: 16px; }
 }
 
 @media (max-height: 700px) {
