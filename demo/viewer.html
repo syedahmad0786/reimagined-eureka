@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#0d1015" />
+    <title>Cube viewer demo</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="../src/styles/tokens.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+        overscroll-behavior: none;
+      }
+      #page {
+        display: flex;
+        flex-direction: column;
+        height: 100dvh;
+      }
+      #status {
+        display: flex;
+        align-items: baseline;
+        gap: var(--gap);
+        padding: 10px 14px 0;
+        min-height: 44px;
+      }
+      #move {
+        font: 700 30px/1 var(--mono);
+        color: var(--highlight);
+      }
+      #info {
+        font-size: 13px;
+        color: var(--text-dim);
+      }
+      #stage {
+        flex: 1;
+        min-height: 0;
+      }
+      #bar {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+      }
+      #bar button {
+        min-height: var(--tap);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text);
+        font: 600 14px var(--font);
+        touch-action: manipulation;
+      }
+      #bar button.primary {
+        background: var(--accent-strong);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      #bar button:active {
+        background: var(--surface-3);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="page">
+      <div id="status"><span id="move">&nbsp;</span><span id="info"></span></div>
+      <div id="stage"></div>
+      <div id="bar">
+        <button id="next" class="primary">Show move</button>
+        <button id="turn" class="primary">Turn it</button>
+        <button id="auto">Auto play</button>
+        <button id="speed">450 ms</button>
+        <button id="scramble">Scramble</button>
+        <button id="solved">Solved</button>
+        <button id="pose">Pose</button>
+        <button id="camera">Reset view</button>
+      </div>
+    </div>
+    <script type="module" src="../tools/viewer/demo.ts"></script>
+  </body>
+</html>

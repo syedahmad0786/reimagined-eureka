@@ -1,0 +1,26 @@
+diff --git a/lib/async.js b/lib/async.js
+index 5638028a71eb901b770ddae107134ed67ebaca80..feeed0c40e8bd5bb3ff835289f723c92def869f8 100644
+--- a/lib/async.js
++++ b/lib/async.js
+@@ -1,7 +1,7 @@
+ (function() {
+   var Cube, Extend, Include, key, value;
+ 
+-  Cube = this.Cube || require('./cube');
++  Cube = require('./cube');
+ 
+   Extend = {
+     asyncOK: !!window.Worker,
+diff --git a/lib/solve.js b/lib/solve.js
+index d263e3aa2989b6798ac5b208351e3263b9c8527c..38ae073be3063438ff89a5c54acd4d267c19d0fc 100644
+--- a/lib/solve.js
++++ b/lib/solve.js
+@@ -2,7 +2,7 @@
+   var B, BL, BR, Cnk, Cube, D, DB, DBL, DF, DFR, DL, DLF, DR, DRB, F, FL, FR, Include, L, N_FLIP, N_FRtoBR, N_PARITY, N_SLICE1, N_SLICE2, N_TWIST, N_UBtoDF, N_URFtoDLF, N_URtoDF, N_URtoUL, R, U, UB, UBR, UF, UFL, UL, ULB, UR, URF, allMoves1, allMoves2, computeMoveTable, computePruningTable, faceNames, faceNums, factorial, key, max, mergeURtoDF, moveTableParams, nextMoves1, nextMoves2, permutationIndex, pruning, pruningTableParams, rotateLeft, rotateRight, value,
+     indexOf = [].indexOf;
+ 
+-  Cube = this.Cube || require('./cube');
++  Cube = require('./cube');
+ 
+   // Centers
+   [U, R, F, D, L, B] = [0, 1, 2, 3, 4, 5];

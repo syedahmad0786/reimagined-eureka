@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Vision test bench</title>
+    <link rel="stylesheet" href="../src/styles/tokens.css" />
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 16px; line-height: 1.4; }
+      main { max-width: 760px; margin: 0 auto; padding: 14px 14px 80px; display: grid; gap: var(--gap); }
+      h1 { font-size: 20px; margin: 4px 0; }
+      h2 { font-size: 16px; margin: 0 0 8px; }
+      p { margin: 0; color: var(--text-dim); font-size: 14px; }
+      .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+      .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      button, .filebtn { min-height: var(--tap); min-width: var(--tap); padding: 0 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; position: relative; touch-action: manipulation; }
+      button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+      button[aria-pressed='true'] { border-color: var(--highlight); color: var(--highlight); }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button:focus-visible, .filebtn:focus-within { outline: 3px solid var(--highlight); outline-offset: 2px; }
+      .filebtn input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+      .slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+      .slot { min-height: 92px; flex-direction: column; gap: 4px; padding: 6px; }
+      .slot canvas { width: 56px; height: 56px; border-radius: 6px; background: var(--surface-3); }
+      .slot small { color: var(--text-dim); }
+      .grids { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+      .grid6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; background: var(--cube-plastic); padding: 3px; border-radius: 6px; aspect-ratio: 1; }
+      .grid6 i { display: block; border-radius: 2px; position: relative; }
+      .grid6 i.low::after { content: ''; position: absolute; inset: 30%; border-radius: 50%; background: #000; opacity: 0.75; }
+      .legend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 14px; }
+      .legend span { display: inline-flex; align-items: center; gap: 6px; }
+      .legend b { width: 18px; height: 18px; border-radius: 4px; display: inline-block; border: 1px solid var(--border); }
+      #status { font-family: var(--mono); font-size: 13px; color: var(--text-dim); white-space: pre-wrap; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Vision test bench</h1>
+      <p>Load or capture photos, fix the outlines, then classify. Add <code>?set=/tmp/vision/synth/v1/cube-000-easy</code> to load a synthetic cube with its true outlines.</p>
+      <div class="panel">
+        <div class="row" role="group" aria-label="Capture mode">
+          <button id="mode-face" aria-pressed="true">Six face photos</button>
+          <button id="mode-corner" aria-pressed="false">Two corner shots</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 id="slots-title">Photos</h2>
+        <div class="slots" id="slots"></div>
+      </div>
+      <div class="panel" id="edit-panel" hidden>
+        <h2 id="edit-title">Outline</h2>
+        <div class="row" style="margin-bottom: 8px">
+          <label class="filebtn">Upload<input id="file" type="file" accept="image/*" /></label>
+          <button id="camera">Camera</button>
+          <button id="detect">Auto-detect</button>
+          <button id="snap">Snap to grid</button>
+        </div>
+        <div id="camera-host"></div>
+        <div id="editor-host"></div>
+        <p id="edit-note"></p>
+        <div class="grids" style="margin-top: 10px" id="sampled"></div>
+      </div>
+      <div class="panel">
+        <div class="row">
+          <button class="primary" id="classify" disabled>Classify</button>
+          <span id="status" role="status"></span>
+        </div>
+        <div class="legend" id="legend" style="margin: 10px 0"></div>
+        <div class="grids" id="result"></div>
+      </div>
+    </main>
+    <script type="module">
+      import {
+        CameraCapture, OutlineEditor, QuadEditor, TWO_SHOT_VIEWS, assembleCornerShots, centredSquareQuad, classifyCube, detectCornerOutline,
+        detectFaceQuad, imageDataToCanvas, loadImageFile, sampleCornerShot, sampleFace, snapOutline, snapQuad, toImageData,
+      } from '../src/vision/index.ts';
+
+      const FACES = ['U top', 'R right', 'F front', 'D bottom', 'L left', 'B back'];
+      const CORNERS = ['Corner 1: U on top, F left, R right', 'Corner 2: D on top, L left, B right'];
+      const $ = (id) => document.getElementById(id);
+      const state = { mode: 'face', slots: [], current: -1, editor: null, camera: null };
+
+      function setMode(mode) {
+        state.mode = mode;
+        $('mode-face').setAttribute('aria-pressed', String(mode === 'face'));
+        $('mode-corner').setAttribute('aria-pressed', String(mode === 'corner'));
+        state.slots = (mode === 'face' ? FACES : CORNERS).map((name) => ({ name, image: null, canvas: null, shape: null }));
+        state.current = -1;
+        closeEditor();
+        $('edit-panel').hidden = true;
+        renderSlots();
+        $('result').replaceChildren();
+        $('legend').replaceChildren();
+        $('status').textContent = '';
+      }
+
+      function renderSlots() {
+        const host = $('slots');
+        host.replaceChildren();
+        state.slots.forEach((slot, i) => {
+          const b = document.createElement('button');
+          b.className = 'slot';
+          b.setAttribute('aria-pressed', String(i === state.current));
+          const c = document.createElement('canvas');
+          c.width = c.height = 112;
+          if (slot.canvas) {
+            const s = Math.max(112 / slot.canvas.width, 112 / slot.canvas.height);
+            c.getContext('2d').drawImage(slot.canvas, (112 - slot.canvas.width * s) / 2, (112 - slot.canvas.height * s) / 2, slot.canvas.width * s, slot.canvas.height * s);
+          }
+          const label = document.createElement('small');
+          label.textContent = slot.name.split(':')[0] + (slot.image ? ' ✓' : '');
+          b.append(c, label);
+          b.addEventListener('click', () => openSlot(i));
+          host.appendChild(b);
+        });
+        $('classify').disabled = !state.slots.every((s) => s.image);
+      }
+
+      function closeEditor() {
+        if (state.editor) state.editor.destroy();
+        state.editor = null;
+        if (state.camera) state.camera.destroy();
+        state.camera = null;
+      }
+
+      function openSlot(i) {
+        state.current = i;
+        closeEditor();
+        $('edit-panel').hidden = false;
+        $('edit-title').textContent = state.slots[i].name;
+        $('camera').hidden = state.mode !== 'face';
+        renderSlots();
+        showEditor();
+      }
+
+      function showEditor() {
+        const slot = state.slots[state.current];
+        if (state.editor) state.editor.destroy();
+        state.editor = null;
+        $('sampled').replaceChildren();
+        if (!slot || !slot.image) {
+          $('edit-note').textContent = 'No photo yet: upload one' + (state.mode === 'face' ? ' or use the camera.' : '.');
+          return;
+        }
+        const onChange = (shape) => {
+          slot.shape = shape;
+          showSamples();
+        };
+        state.editor = state.mode === 'face' ? new QuadEditor($('editor-host'), slot.canvas, slot.shape, onChange) : new OutlineEditor($('editor-host'), slot.canvas, slot.shape, onChange);
+        $('edit-note').textContent = 'Drag the round grips so the grid sits on the stickers. Row 1 of the grid is the top row of the face.';
+        showSamples();
+      }
+
+      function gridElement(colours, low) {
+        const g = document.createElement('div');
+        g.className = 'grid6';
+        colours.forEach((css, i) => {
+          const cell = document.createElement('i');
+          cell.style.background = css;
+          if (low && low[i]) cell.className = 'low';
+          g.appendChild(cell);
+        });
+        return g;
+      }
+
+      function showSamples() {
+        const slot = state.slots[state.current];
+        if (!slot || !slot.image) return;
+        const faces = state.mode === 'face' ? [sampleFace(slot.image, slot.shape)] : sampleCornerShot(slot.image, slot.shape);
+        $('sampled').replaceChildren(
+          ...faces.map((f) => gridElement(Array.from({ length: 36 }, (_, i) => 'rgb(' + [0, 1, 2].map((c) => Math.round(f.rgb[i * 3 + c])).join(',') + ')'), Array.from(f.quality, (q) => q < 0.5))),
+        );
+      }
+
+      async function setImage(image, shape) {
+        const slot = state.slots[state.current];
+        slot.image = image;
+        slot.canvas = imageDataToCanvas(image);
+        if (shape) slot.shape = shape;
+        else autoDetect(false);
+        renderSlots();
+        showEditor();
+      }
+
+      function autoDetect(redraw = true) {
+        const slot = state.slots[state.current];
+        if (!slot || !slot.image) return;
+        const t0 = performance.now();
+        if (state.mode === 'face') {
+          const d = detectFaceQuad(slot.image);
+          slot.shape = d.quad;
+          $('status').textContent = 'detectFaceQuad ' + (performance.now() - t0).toFixed(0) + ' ms, confidence ' + d.confidence.toFixed(2);
+        } else {
+          const d = detectCornerOutline(slot.image);
+          slot.shape = d.outline;
+          $('status').textContent = 'detectCornerOutline ' + (performance.now() - t0).toFixed(0) + ' ms, confidence ' + d.confidence.toFixed(2);
+        }
+        if (redraw) showEditor();
+      }
+
+      $('file').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        e.target.value = '';
+        if (!file || state.current < 0) return;
+        try {
+          await setImage(await loadImageFile(file));
+        } catch (err) {
+          $('edit-note').textContent = err.message;
+        }
+      });
+      $('camera').addEventListener('click', async () => {
+        if (state.current < 0) return;
+        closeEditor();
+        state.camera = new CameraCapture($('camera-host'), { onError: (m) => ($('edit-note').textContent = m) });
+        await state.camera.start();
+        try {
+          const frame = await state.camera.capture();
+          state.camera.destroy();
+          state.camera = null;
+          await setImage(frame.image, frame.quad);
+        } catch {
+          /* closed */
+        }
+      });
+      $('detect').addEventListener('click', () => autoDetect());
+      $('snap').addEventListener('click', () => {
+        const slot = state.slots[state.current];
+        if (!slot || !slot.image) return;
+        slot.shape = state.mode === 'face' ? snapQuad(slot.image, slot.shape) : snapOutline(slot.image, slot.shape);
+        showEditor();
+      });
+      $('mode-face').addEventListener('click', () => setMode('face'));
+      $('mode-corner').addEventListener('click', () => setMode('corner'));
+
+      function classify() {
+        const t0 = performance.now();
+        let faces;
+        if (state.mode === 'face') faces = state.slots.map((s) => sampleFace(s.image, s.shape));
+        else faces = assembleCornerShots(state.slots.map((s, i) => ({ view: TWO_SHOT_VIEWS[i], faces: sampleCornerShot(s.image, s.shape) })));
+        const result = classifyCube(faces);
+        const ms = performance.now() - t0;
+        $('result').replaceChildren(
+          ...FACES.map((name, f) => {
+            const wrap = document.createElement('div');
+            const title = document.createElement('p');
+            title.textContent = name;
+            wrap.append(title, gridElement(Array.from({ length: 36 }, (_, i) => result.palette[result.labels[f * 36 + i]]), Array.from({ length: 36 }, (_, i) => result.confidence[f * 36 + i] < 0.6)));
+            return wrap;
+          }),
+        );
+        $('legend').replaceChildren(
+          ...result.names.map((n, k) => {
+            const s = document.createElement('span');
+            const b = document.createElement('b');
+            b.style.background = result.palette[k];
+            s.append(b, document.createTextNode(k + ' ' + n));
+            return s;
+          }),
+        );
+        const low = Array.from(result.confidence).filter((c) => c < 0.6).length;
+        $('status').textContent = 'sample + classify ' + ms.toFixed(1) + ' ms; ' + low + ' stickers marked as unsure (dot)';
+        window.visionDemoResult = { labels: Array.from(result.labels), names: result.names, palette: result.palette, ms, low };
+      }
+      $('classify').addEventListener('click', classify);
+
+      // Optional: load a synthetic cube and its true outlines.
+      async function loadSet(url) {
+        const meta = await (await fetch(url + '/meta.json')).json();
+        const shots = meta.shots.filter((s) => s.kind === state.mode).sort((a, b) => (a.face ?? 0) - (b.face ?? 0));
+        for (let i = 0; i < shots.length; i++) {
+          const blob = await (await fetch(url + '/' + shots[i].file)).blob();
+          const image = await loadImageFile(blob);
+          const pts = (shots[i].quad || shots[i].outline).map((p) => ({ x: p[0], y: p[1] }));
+          state.slots[i].image = image;
+          state.slots[i].canvas = imageDataToCanvas(image);
+          state.slots[i].shape = new URLSearchParams(location.search).has('detect') ? (state.mode === 'face' ? detectFaceQuad(image).quad : detectCornerOutline(image).outline) : pts;
+        }
+        window.visionDemoTruth = meta.state;
+        renderSlots();
+        openSlot(0);
+      }
+
+      window.visionDemoShape = () => (state.slots[state.current] ? state.slots[state.current].shape.map((p) => ({ x: p.x, y: p.y })) : null);
+      window.visionDemoImageSize = () => (state.slots[state.current] && state.slots[state.current].image ? { width: state.slots[state.current].image.width, height: state.slots[state.current].image.height } : null);
+      const params = new URLSearchParams(location.search);
+      setMode(params.get('mode') === 'corner' ? 'corner' : 'face');
+      if (params.get('set')) loadSet(params.get('set')).then(() => (window.visionDemoReady = true)).catch((e) => ($('status').textContent = 'could not load set: ' + e.message));
+      else window.visionDemoReady = true;
+    </script>
+  </body>
+</html>
