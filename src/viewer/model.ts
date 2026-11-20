@@ -20,7 +20,7 @@ const CENTRE = (N - 1) / 2;
 const STICKER_SIZE = 0.86;
 const STICKER_RADIUS = 0.13;
 const STICKER_OFFSET = 0.503;
-const UNKNOWN_COLOUR = '#4a5361';
+const UNKNOWN_COLOUR = '#544858';
 const PLASTIC_COLOUR = '#0b0c0f';
 
 export const AXIS_VECTORS: readonly THREE.Vector3[] = [
@@ -87,7 +87,7 @@ export class CubeModel {
   private readonly slabGeometries = new Map<string, RoundedBoxGeometry>();
   private slabs: THREE.Mesh[] = [];
   private readonly stickerGeometry = roundedSquare(STICKER_SIZE, STICKER_RADIUS);
-  private readonly bodyMaterial = new THREE.MeshStandardMaterial({ color: PLASTIC_COLOUR, roughness: 0.4, metalness: 0 });
+  private readonly bodyMaterial = new THREE.MeshStandardMaterial({ color: PLASTIC_COLOUR, roughness: 0.32, metalness: 0 });
   private readonly unknown = new THREE.Color(UNKNOWN_COLOUR);
   /** The move whose block currently sits in the pivot, if any. */
   private held: Move | null = null;

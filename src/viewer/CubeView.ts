@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FACE_NAMES, FACE_NORMALS } from '../cube/geometry';
-import { sameMove, type Move } from '../cube/moves';
+import { describeMove, sameMove, type Move } from '../cube/moves';
 import { CubeModel, HALF, LIFT, checkMove } from './model';
 import { buildFaceFrame, buildMoveIndicator, type ArrowInfo, type MoveIndicator } from './indicator';
 
@@ -14,6 +14,8 @@ export interface CubeViewOptions {
   interactive?: boolean;
   /** Small "TOP / FRONT / RIGHT" style markers that stay with the cube so the user keeps their bearings. Default true. */
   faceLabels?: boolean;
+  /** A soft shadow under the cube, so it sits on the page instead of floating. Default true. */
+  shadow?: boolean;
 }
 
 /** What debug() returns. For tests and the demo page only. */
@@ -45,6 +47,13 @@ const DEFAULT_DIRECTION = new THREE.Vector3(
   Math.cos(DEFAULT_AZIMUTH) * Math.cos(DEFAULT_ELEVATION),
 );
 
+/**
+ * Light for the black plastic only. Stickers are drawn unlit, in exactly the colours of the palette,
+ * so a sticker on screen can be compared with the one in the hand whichever side it is on.
+ */
+const AMBIENT = 0.75;
+const KEY = new THREE.Vector3(0.3, 0.75, 0.5);
+
 type Slot = 'turn' | 'pose' | 'camera';
 
 interface Tween {
@@ -58,6 +67,14 @@ interface Tween {
 function ease(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
+
+/** Like ease, but runs a few degrees past the end and settles back, like a layer clicking into place. */
+function easeClick(t: number): number {
+  const spring = (x: number): number => 1 - Math.exp(-SPRING_DECAY * x) * (Math.cos(SPRING_RATE * x) + (SPRING_DECAY / SPRING_RATE) * Math.sin(SPRING_RATE * x));
+  return spring(t) + (1 - spring(1)) * t;
+}
+const SPRING_DECAY = 6.2;
+const SPRING_RATE = 6.3;
 
 function smoothstep(a: number, b: number, t: number): number {
   const x = Math.min(1, Math.max(0, (t - a) / (b - a)));
@@ -82,6 +99,11 @@ export class CubeView {
   private readonly observer: ResizeObserver;
   private readonly labels: { el: HTMLDivElement; width: number; height: number }[] = [];
   private readonly badge: HTMLDivElement;
+  private readonly layerPill: HTMLDivElement;
+  private readonly cornerRing: HTMLDivElement;
+  private cornerMarked = false;
+  /** The user has dragged the view since it was last reset, so aim() leaves it where they put it. */
+  private userOrbit = false;
   private readonly colours: { highlight: string; arrow: string; arrowEdge: string };
 
   private tweens: Partial<Record<Slot, Tween>> = {};
@@ -95,13 +117,16 @@ export class CubeView {
   private indicatorOpacity = 1;
   private faceMark: { group: THREE.Group; dispose(): void } | null = null;
   private disposed = false;
+  private spinRate = 0;
+  private spinLast = 0;
+  private shadow: { mesh: THREE.Mesh; dispose(): void } | null = null;
 
   constructor(container: HTMLElement, options: CubeViewOptions = {}) {
     this.container = container;
     const css = getComputedStyle(container);
     const token = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
     this.colours = {
-      highlight: token('--highlight', '#7df9ff'),
+      highlight: token('--cube-outline', '') || token('--highlight', '#7df9ff'),
       arrow: token('--cube-arrow', '#ff3fd0'),
       arrowEdge: token('--cube-arrow-edge', '#05070a'),
     };
@@ -120,10 +145,14 @@ export class CubeView {
     container.append(this.wrap);
 
     this.scene.add(this.model.root);
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa3b5, 2.4));
-    const key = new THREE.DirectionalLight(0xffffff, 2.6);
-    key.position.set(5, 10, 7);
+    this.scene.add(new THREE.AmbientLight(0xffffff, AMBIENT * Math.PI));
+    const key = new THREE.DirectionalLight(0xffffff, KEY.length() * Math.PI);
+    key.position.copy(KEY);
     this.scene.add(key);
+    if (options.shadow !== false) {
+      this.shadow = this.buildShadow();
+      this.scene.add(this.shadow.mesh);
+    }
 
     const pill =
       'position:absolute;left:0;top:0;white-space:nowrap;border-radius:999px;font-family:var(--font, system-ui, sans-serif);will-change:transform,opacity;';
@@ -133,7 +162,7 @@ export class CubeView {
         el.textContent = name.toUpperCase();
         el.style.cssText =
           pill +
-          'padding:4px 8px;font-size:11px;font-weight:650;line-height:1;letter-spacing:0.09em;color:var(--text-dim, #9ba6b5);' +
+          'padding:5px 9px;font-size:13px;font-weight:650;line-height:1;letter-spacing:0.06em;color:var(--text-dim, #9ba6b5);' +
           'background:var(--surface-2, #1e232c);border:1px solid var(--border, #2c3440);opacity:0;';
         this.overlay.append(el);
         this.labels.push({ el, width: 0, height: 0 });
@@ -146,6 +175,23 @@ export class CubeView {
       'padding:5px 9px;font-size:16px;font-weight:800;line-height:1;color:var(--accent-ink, #051120);' +
       'background:var(--highlight, #7df9ff);box-shadow:0 0 0 2px var(--accent-ink, #051120), 0 2px 8px rgba(0,0,0,0.5);opacity:0;';
     this.overlay.append(this.badge);
+    // The number is drawn from a data attribute, so the overlay's own text stays the face names and "180°".
+    if (!document.getElementById('cube-view-layers')) {
+      const style = document.createElement('style');
+      style.id = 'cube-view-layers';
+      style.textContent = '[data-layers]::after{content:attr(data-layers)}';
+      document.head.append(style);
+    }
+    this.layerPill = document.createElement('div');
+    this.layerPill.style.cssText =
+      pill +
+      'min-width:28px;padding:6px 8px;text-align:center;font-size:16px;font-weight:800;line-height:1;color:var(--accent-ink, #051120);' +
+      'background:var(--highlight, #7df9ff);box-shadow:0 0 0 2px var(--accent-ink, #051120), 0 2px 8px rgba(0,0,0,0.5);opacity:0;';
+    this.cornerRing = document.createElement('div');
+    this.cornerRing.style.cssText =
+      'position:absolute;left:0;top:0;width:68px;height:68px;border-radius:50%;border:4px solid var(--highlight, #7df9ff);' +
+      'box-shadow:0 0 0 2px var(--accent-ink, #051120), inset 0 0 0 2px var(--accent-ink, #051120);will-change:transform,opacity;opacity:0;';
+    this.overlay.append(this.layerPill, this.cornerRing);
 
     if (options.interactive !== false) {
       const controls = new OrbitControls(this.camera, canvas);
@@ -191,6 +237,9 @@ export class CubeView {
       this.indicator = buildMoveIndicator(move, { arrow: this.colours.arrow, arrowEdge: this.colours.arrowEdge, outline: this.colours.highlight });
       this.indicatorOpacity = 1;
       this.model.decor.add(this.indicator.group);
+      // Inner slices and wide turns carry their layer numbers, counted from the named face, so nobody has to count columns.
+      const d = describeMove(move);
+      this.layerPill.dataset.layers = d.toLayer === 1 ? '' : d.fromLayer === d.toLayer ? String(d.fromLayer) : d.fromLayer + '\u2013' + d.toLayer;
     }
     this.requestRender();
   }
@@ -199,6 +248,8 @@ export class CubeView {
   animateMove(move: Move, options: { durationMs?: number } = {}): Promise<void> {
     checkMove(move);
     this.finish('turn');
+    // A quick turn clicks into place; a slow one is a demonstration and moves evenly.
+    const curve = (options.durationMs ?? 450) <= 600 ? easeClick : ease;
     const decorated = this.shown !== null && sameMove(this.shown, move);
     if (!decorated) {
       this.clearShown();
@@ -209,7 +260,7 @@ export class CubeView {
         'turn',
         options.durationMs ?? 450,
         (t) => {
-          this.model.setTurn(ease(t));
+          this.model.setTurn(curve(t));
           if (!decorated) return;
           this.model.setLift(1 - smoothstep(0.7, 1, t));
           this.indicatorOpacity = 1 - smoothstep(0.3, 0.85, t);
@@ -235,22 +286,59 @@ export class CubeView {
 
   /** Bring the camera back to the default three-quarter view (top, front and right faces visible). */
   resetCamera(animate = true): void {
+    this.userOrbit = false;
+    this.orbitTo(DEFAULT_DIRECTION, animate ? 380 : 0);
+  }
+
+  /**
+   * Orbit a little toward the side this move is on, so a turn of the back, left or bottom layers is not
+   * seen edge-on. The top, front and right faces all stay in view. null returns to the default view.
+   * Once the user has dragged the view this does nothing, until resetCamera.
+   */
+  aim(move: Move | null, animate = true): void {
+    if (this.userOrbit) return;
+    const to = new THREE.Spherical().setFromVector3(DEFAULT_DIRECTION);
+    const face = move ? describeMove(move).face : '';
+    if (face === 'B') [to.theta, to.phi] = [to.theta + 0.42, to.phi - 0.14];
+    else if (face === 'L') [to.theta, to.phi] = [to.theta - 0.2, to.phi - 0.14];
+    else if (face === 'D') to.phi += 0.2;
+    this.orbitTo(new THREE.Vector3().setFromSpherical(to), animate ? 420 : 0);
+  }
+
+  /** Ring the top-front-right corner piece, the one the "hold your cube like this" card names. */
+  markCorner(on: boolean): void {
+    this.cornerMarked = on;
+    this.requestRender();
+  }
+
+  private orbitTo(direction: THREE.Vector3, ms: number): void {
     this.finish('camera');
     const from = new THREE.Spherical().setFromVector3(this.camera.position);
-    const to = new THREE.Spherical().setFromVector3(DEFAULT_DIRECTION);
+    const to = new THREE.Spherical().setFromVector3(direction);
     to.radius = this.fitDistance;
     to.theta = from.theta + Math.atan2(Math.sin(to.theta - from.theta), Math.cos(to.theta - from.theta));
     const now = new THREE.Spherical();
+    const end = direction.clone().normalize().multiplyScalar(this.fitDistance);
     this.start(
       'camera',
-      animate ? 380 : 0,
+      ms,
       (t) => {
         const e = ease(t);
         now.set(from.radius + (to.radius - from.radius) * e, from.phi + (to.phi - from.phi) * e, from.theta + (to.theta - from.theta) * e);
         this.placeCamera(new THREE.Vector3().setFromSpherical(now));
       },
-      () => this.placeCamera(DEFAULT_DIRECTION.clone().multiplyScalar(this.fitDistance)),
+      () => this.placeCamera(end),
     );
+  }
+
+  /**
+   * Orbit the camera round the cube at this many radians a second (0 stops). The cube itself stays put.
+   * Used where the cube is on show rather than being read: the home screen and the solved screen.
+   */
+  spin(radiansPerSecond: number): void {
+    this.spinRate = radiansPerSecond;
+    this.spinLast = 0;
+    this.requestRender();
   }
 
   /**
@@ -344,7 +432,7 @@ export class CubeView {
     // Draw at once: resizing clears the canvas, and waiting a frame would flash.
     this.cancelFrame();
     this.draw();
-    if (this.hasTweens()) this.frame = requestAnimationFrame(this.tick);
+    if (this.hasTweens() || this.spinRate) this.frame = requestAnimationFrame(this.tick);
   }
 
   dispose(): void {
@@ -357,6 +445,7 @@ export class CubeView {
     this.observer.disconnect();
     this.controls?.dispose();
     this.renderer.domElement.removeEventListener('webglcontextrestored', this.requestRender);
+    this.shadow?.dispose();
     this.model.dispose();
     this.renderer.dispose();
     this.wrap.remove();
@@ -399,6 +488,7 @@ export class CubeView {
 
   private onControlStart = (): void => {
     // The user took hold of the camera: stop a running "reset camera" where it is.
+    this.userOrbit = true;
     const tween = this.tweens.camera;
     if (!tween) return;
     clearTimeout(tween.timer);
@@ -464,6 +554,34 @@ export class CubeView {
     };
   }
 
+  /** A soft dark pool on the floor under the cube. */
+  private buildShadow(): { mesh: THREE.Mesh; dispose(): void } {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 128;
+    const g = canvas.getContext('2d') as CanvasRenderingContext2D;
+    const fade = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    fade.addColorStop(0, 'rgba(0,0,0,0.5)');
+    fade.addColorStop(0.55, 'rgba(0,0,0,0.26)');
+    fade.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = fade;
+    g.fillRect(0, 0, 128, 128);
+    const texture = new THREE.CanvasTexture(canvas);
+    const geometry = new THREE.PlaneGeometry(HALF * 4.2, HALF * 4.2);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = -HALF * 1.22;
+    mesh.renderOrder = -1;
+    return {
+      mesh,
+      dispose() {
+        geometry.dispose();
+        material.dispose();
+        texture.dispose();
+      },
+    };
+  }
+
   private start(slot: Slot, duration: number, step: (t: number) => void, done: () => void): void {
     this.finish(slot);
     if (!(duration > 0)) {
@@ -509,9 +627,18 @@ export class CubeView {
       if (t >= 1) this.finish(slot);
       else tween.step(Math.max(0, t));
     }
+    if (this.spinRate) {
+      const dt = this.spinLast ? Math.min(0.05, (now - this.spinLast) / 1000) : 0;
+      this.spinLast = now;
+      if (!this.tweens.camera) {
+        this.camera.position.applyAxisAngle(THREE.Object3D.DEFAULT_UP, this.spinRate * dt);
+        this.camera.lookAt(0, 0, 0);
+        this.controls?.update();
+      }
+    }
     this.cancelFrame();
     this.draw();
-    if (this.hasTweens()) this.frame = requestAnimationFrame(this.tick);
+    if (this.hasTweens() || this.spinRate) this.frame = requestAnimationFrame(this.tick);
   };
 
   private draw(): void {
@@ -584,5 +711,29 @@ export class CubeView {
       this.badge.style.transform = 'translate(' + s.x.toFixed(1) + 'px,' + s.y.toFixed(1) + 'px) translate(-50%,-50%)';
     }
     this.badge.style.opacity = best ? this.indicatorOpacity.toFixed(3) : '0';
+
+    let pillAt: THREE.Vector3 | null = null;
+    let pillFacing = 0.12;
+    if (this.indicator && this.shown && this.layerPill.dataset.layers) {
+      const decor = this.model.decor;
+      decor.updateWorldMatrix(true, false);
+      for (const anchor of this.indicator.layerAnchors) {
+        const point = anchor.point.clone().applyMatrix4(decor.matrixWorld);
+        const normal = anchor.normal.clone().transformDirection(decor.matrixWorld);
+        const facing = normal.dot(cam.clone().sub(point).normalize());
+        if (facing > pillFacing) [pillAt, pillFacing] = [point, facing];
+      }
+    }
+    if (pillAt) {
+      const s = this.toScreen(pillAt);
+      this.layerPill.style.transform = 'translate(' + s.x.toFixed(1) + 'px,' + s.y.toFixed(1) + 'px) translate(-50%,-50%)';
+    }
+    this.layerPill.style.opacity = pillAt ? this.indicatorOpacity.toFixed(3) : '0';
+
+    if (this.cornerMarked) {
+      const s = this.toScreen(new THREE.Vector3(HALF, HALF, HALF).applyQuaternion(root.quaternion));
+      this.cornerRing.style.transform = 'translate(' + s.x.toFixed(1) + 'px,' + s.y.toFixed(1) + 'px) translate(-50%,-50%)';
+    }
+    this.cornerRing.style.opacity = this.cornerMarked ? '1' : '0';
   }
 }
