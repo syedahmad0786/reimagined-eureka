@@ -18,7 +18,7 @@ import { validateState } from '../../src/cube/validate';
 const args = process.argv.slice(2);
 const port = args.includes('--port') ? args[args.indexOf('--port') + 1] : '5182';
 const pairs = args.filter((a) => /^\d,\d$/.test(a));
-const DIR = process.env.HOME + '/.capy/drive/captain-rubic/handoffs/reference-photos/';
+const DIR = (process.env.CUBE_REFERENCE_PHOTOS ?? 'tmp/reference-photos') + '/';
 const reference = (JSON.parse(readFileSync('tmp/vision/reference-state.json', 'utf8')) as { state: number[] }).state;
 
 const PERMS: number[][] = [];

@@ -518,7 +518,7 @@ clips played to corner mode captured 0 of 18 (last hint: "only one side" 11, not
 
 ### Photos 5 then 4
 
-Ahmad's report was that the app misreads the cube when photo 5 is scanned first and photo 4 second.
+The owner's report was that the app misreads the cube when photo 5 is scanned first and photo 4 second.
 Measured in Chromium 157.0.8103.78 through the app's own `assembleTwoShots`, with automatic outlines
 (confidence 1 and 1), and in Node with the same result:
 

@@ -21,7 +21,7 @@ const arg = (name: string, fallback: string): string => {
   return i >= 0 && process.argv[i + 1] ? (process.argv[i + 1] as string) : fallback;
 };
 const out = arg('out', '/tmp/vz-real-clips');
-const DIR = process.env.HOME + '/.capy/drive/captain-rubic/handoffs/reference-photos/';
+const DIR = (process.env.CUBE_REFERENCE_PHOTOS ?? 'tmp/reference-photos') + '/';
 const APPROACH = 6;
 const HOLD = 20;
 const FPS = 10;

@@ -6,7 +6,7 @@ A web app that reads a scrambled 6x6x6 Rubik's Cube through the phone camera and
 
 ## Who uses it, and where
 
-Ahmad, who owns a 6x6x6 cube and wants to solve it himself with guidance. He uses it mostly on his phone, in portrait, at home under indoor light, with the phone in one hand or propped on a table and the cube in the other hand. During the solve both hands are often on the cube, and he looks at the screen in short glances from arm's length. A laptop is a secondary way in.
+One person, who owns a 6x6x6 cube and wants to solve it himself with guidance. He uses it mostly on his phone, in portrait, at home under indoor light, with the phone in one hand or propped on a table and the cube in the other hand. During the solve both hands are often on the cube, and he looks at the screen in short glances from arm's length. A laptop is a secondary way in.
 
 ## The job
 

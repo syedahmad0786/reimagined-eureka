@@ -99,7 +99,7 @@ console.log('3. Live corner finder on straight-on photos: found something ' + pc
 console.log('4. True corner outlines against the corner rules: pass ' + pct(cornerTruth.pass, cornerTruth.n) + ', refused because ' + JSON.stringify(cornerTruth.codes));
 
 if (args.includes('--real')) {
-  const dir = process.env.HOME + '/.capy/drive/captain-rubic/handoffs/reference-photos/';
+  const dir = (process.env.CUBE_REFERENCE_PHOTOS ?? 'tmp/reference-photos') + '/';
   for (const file of readdirSync(dir).filter((f) => f.endsWith('.jpeg'))) {
     const small = shrink(readImage(dir + file), 320);
     // The phone view is 3:4; a 747x1600 photo is taller, so judge against the centred 3:4 part as the camera would show it.
