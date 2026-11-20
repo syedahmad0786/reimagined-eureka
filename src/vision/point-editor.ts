@@ -13,8 +13,15 @@ export type EditorImage = CanvasImageSource & { width: number; height: number };
 export interface PointEditorConfig {
   /** Quads to draw a 6x6 grid in, from the current points. */
   grids: (points: Point[]) => Quad[];
-  /** Stroke colour per grid (CSS). */
+  /**
+   * Stroke colour per grid: a CSS colour, or var(--token, fallback), which is read from the page's
+   * tokens every time the editor draws.
+   */
   gridColours: string[];
+  /** Dash pattern per grid (default: a solid line), so that grids differ by more than colour. */
+  gridDashes?: number[][];
+  /** Short name per grid, drawn in its middle while no point is being dragged. */
+  gridNames?: string[];
   /** Direction, in image space, in which the grip of point i sits away from the point (zero for "on the point"). */
   gripDirection: (points: Point[], i: number) => Point;
   /** Short name per point, for screen readers. */
@@ -58,6 +65,8 @@ export class PointEditor {
     this.root.setAttribute('aria-label', 'Outline editor. Drag the round grips, or select a point with Tab and move it with the arrow keys.');
     Object.assign(this.root.style, { position: 'relative', width: '100%', touchAction: 'none', userSelect: 'none', outline: 'none', webkitUserSelect: 'none' });
     this.canvas = document.createElement('canvas');
+    this.canvas.setAttribute('role', 'img');
+    this.canvas.setAttribute('aria-label', 'The photo with the outline grid drawn on it and ' + this.points.length + ' round grips, one for each point of the outline.');
     Object.assign(this.canvas.style, { display: 'block', width: '100%', borderRadius: 'var(--radius-sm, 9px)', background: 'var(--surface, #161a21)' });
     this.ctx = this.canvas.getContext('2d') as CanvasRenderingContext2D;
     this.live = document.createElement('div');
@@ -213,6 +222,18 @@ export class PointEditor {
     return v || fallback;
   }
 
+  /** The stroke colour of grid qi, with var(--token, fallback) resolved against the page. */
+  private gridColour(qi: number): string {
+    const spec = this.config.gridColours[qi % this.config.gridColours.length] as string;
+    const m = /^var\(\s*(--[\w-]+)\s*(?:,\s*(.+))?\)$/.exec(spec.trim());
+    return m ? this.cssVar(m[1] as string, (m[2] || '#fff').trim()) : spec;
+  }
+
+  private gridDash(qi: number): number[] {
+    const d = this.config.gridDashes;
+    return d && d.length ? (d[qi % d.length] as number[]) : [];
+  }
+
   private draw(): void {
     if (this.destroyed) return;
     const g = this.ctx;
@@ -236,13 +257,37 @@ export class PointEditor {
           line(0, i / 6, 1, i / 6);
         }
         g.lineWidth = pass === 0 ? 3.5 : 1.5;
-        g.strokeStyle = pass === 0 ? 'rgba(0,0,0,0.55)' : (this.config.gridColours[qi % this.config.gridColours.length] as string);
+        g.strokeStyle = pass === 0 ? 'rgba(0,0,0,0.55)' : this.gridColour(qi);
+        g.setLineDash(pass === 0 ? [] : this.gridDash(qi));
         g.stroke();
       }
+      g.setLineDash([]);
     });
+    // Names of the grids, out of the way while a point is being moved.
+    const names = this.config.gridNames;
+    if (names && this.active < 0) {
+      g.font = '600 12px ' + (getComputedStyle(this.root).fontFamily || 'system-ui, sans-serif');
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      quads.forEach((quad, qi) => {
+        const name = names[qi];
+        if (!name) return;
+        const c = this.toCss(applyMat3(squareToQuad(quad), 0.5, 0.5));
+        const w = g.measureText(name).width + 14;
+        g.fillStyle = this.cssVar('--accent-ink', '#120616');
+        g.globalAlpha = 0.78;
+        g.beginPath();
+        g.roundRect(c.x - w / 2, c.y - 10, w, 20, 10);
+        g.fill();
+        g.globalAlpha = 1;
+        g.fillStyle = this.gridColour(qi);
+        g.fillText(name, c.x, c.y + 0.5);
+      });
+    }
     // Grips.
     const accent = this.cssVar('--accent', '#5aa2ff');
     const highlight = this.cssVar('--highlight', '#7df9ff');
+    const ink = this.cssVar('--accent-ink', '#0d1015');
     for (let i = 0; i < this.points.length; i++) {
       const p = this.toCss(this.points[i] as Point);
       const grip = this.gripCss(i);
@@ -255,8 +300,10 @@ export class PointEditor {
       g.stroke();
       g.beginPath();
       g.arc(grip.x, grip.y, GRIP_RADIUS, 0, Math.PI * 2);
-      g.fillStyle = on ? 'rgba(125,249,255,0.3)' : 'rgba(13,16,21,0.45)';
+      g.fillStyle = on ? highlight : ink;
+      g.globalAlpha = on ? 0.3 : 0.45;
       g.fill();
+      g.globalAlpha = 1;
       g.lineWidth = on ? 4 : 3;
       g.strokeStyle = on ? highlight : accent;
       g.stroke();
@@ -307,8 +354,10 @@ export class PointEditor {
         g.lineTo(d.x, d.y);
       }
       g.lineWidth = 1.5;
-      g.strokeStyle = this.config.gridColours[qi % this.config.gridColours.length] as string;
+      g.strokeStyle = this.gridColour(qi);
+      g.setLineDash(this.gridDash(qi));
       g.stroke();
+      g.setLineDash([]);
     });
     g.beginPath();
     g.moveTo(cx - 12, cy);

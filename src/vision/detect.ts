@@ -356,83 +356,171 @@ function squareQuad(cx: number, cy: number, size: number, rot: number): Quad {
   ];
 }
 
-const confidenceOf = (score: number): number => Math.max(0, Math.min(1, (score - 0.12) / 0.2));
+/** Outline confidence 0..1 from a grid score. */
+export const confidenceOf = (score: number): number => Math.max(0, Math.min(1, (score - 0.12) / 0.2));
 
-/** Outline of the 6x6 sticker area of a face photographed roughly straight on. */
-export function detectFaceQuad(image: ImageLike): { quad: Quad; confidence: number } {
-  const fallback = { quad: centredSquareQuad(image.width, image.height), confidence: 0 };
-  try {
-    if (!(image.width >= 24 && image.height >= 24)) return fallback;
-    const { coarse, fine } = edgeMaps(image, 190, 440);
-    const short = Math.min(image.width, image.height);
-    const best: Candidate<Quad>[] = [];
-    const hull = colourfulHull(image) || foregroundHull(image);
-    let bx0 = 0;
-    let by0 = 0;
-    let bx1 = image.width;
-    let by1 = image.height;
-    let minSize = 0.26 * short;
-    let maxSize = short;
-    if (hull) {
-      const xs = hull.map((p) => p.x);
-      const ys = hull.map((p) => p.y);
-      const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-      const pad = 0.12 * span;
-      bx0 = Math.max(0, Math.min(...xs) - pad);
-      by0 = Math.max(0, Math.min(...ys) - pad);
-      bx1 = Math.min(image.width, Math.max(...xs) + pad);
-      by1 = Math.min(image.height, Math.max(...ys) + pad);
-      minSize = Math.max(minSize, 0.5 * span);
-      maxSize = Math.min(maxSize, 1.15 * span);
-      const quad = circumscribe(hull, 4);
-      if (quad) {
-        let first = 0;
-        for (let i = 1; i < 4; i++) if ((quad[i] as Point).x + (quad[i] as Point).y < (quad[first] as Point).x + (quad[first] as Point).y) first = i;
-        const q = [0, 1, 2, 3].map((i) => quad[(first + i) % 4] as Point) as Quad;
-        best.push({ score: 1, cx: -1e9, cy: -1e9, size: span, shape: q });
-      }
-    }
-    for (let size = minSize; size <= maxSize; size *= 1.08) {
+/**
+ * Below this grid score the first search is not trusted and wider searches are tried as well. In every
+ * wrong outline of the version 1 evaluation the true outline scored higher than the one returned (0.54
+ * to 0.61 against 0.11 to 0.44): the blob that was meant to say where the cube is had misled the search.
+ */
+const RETRY_BELOW = 0.5;
+
+/** Where the cube is expected, in image pixels: the on-screen guide the user aims with. */
+export interface NearHint {
+  cx: number;
+  cy: number;
+  /** Side of the face (face search) or width of the silhouette (corner search). */
+  size: number;
+}
+
+export interface FindOptions {
+  near?: NearHint | null;
+  /** Live video: a smaller search that fits a frame budget, at the price of fewer candidates. */
+  quick?: boolean;
+}
+
+interface FaceRegion {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  minSize: number;
+  maxSize: number;
+}
+
+function faceRegionOfHull(image: ImageLike, hull: readonly Point[]): { region: FaceRegion; seed: { quad: Quad; size: number } | null } {
+  const short = Math.min(image.width, image.height);
+  const xs = hull.map((p) => p.x);
+  const ys = hull.map((p) => p.y);
+  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  const pad = 0.12 * span;
+  const region = {
+    x0: Math.max(0, Math.min(...xs) - pad),
+    y0: Math.max(0, Math.min(...ys) - pad),
+    x1: Math.min(image.width, Math.max(...xs) + pad),
+    y1: Math.min(image.height, Math.max(...ys) + pad),
+    minSize: Math.max(0.26 * short, 0.5 * span),
+    maxSize: Math.min(short, 1.15 * span),
+  };
+  const quad = circumscribe(hull, 4);
+  if (!quad) return { region, seed: null };
+  let first = 0;
+  for (let i = 1; i < 4; i++) if ((quad[i] as Point).x + (quad[i] as Point).y < (quad[first] as Point).x + (quad[first] as Point).y) first = i;
+  return { region, seed: { quad: [0, 1, 2, 3].map((i) => quad[(first + i) % 4] as Point) as Quad, size: span } };
+}
+
+/** Coarse sliding search over the regions, then refinement of the best few and of the seeds. */
+function searchFace(coarse: EdgeMap, fine: EdgeMap, regions: readonly FaceRegion[], seeds: readonly { quad: Quad; size: number }[], rotations: readonly number[], keep: number): { quad: Quad; score: number } | null {
+  const best: Candidate<Quad>[] = [];
+  for (const s of seeds) best.push({ score: 1, cx: -1e9, cy: -1e9, size: s.size, shape: s.quad });
+  for (const g of regions) {
+    for (let size = g.minSize; size <= g.maxSize; size *= 1.08) {
       const step = size / 12;
-      for (const deg of [-16, -8, 0, 8, 16]) {
+      for (const deg of rotations) {
         const rot = (deg * Math.PI) / 180;
         const ext = (size / 2) * (Math.abs(Math.cos(rot)) + Math.abs(Math.sin(rot)));
-        const x0 = Math.min(bx0 + ext, (bx0 + bx1) / 2);
-        const x1 = Math.max(bx1 - ext, (bx0 + bx1) / 2);
-        const y0 = Math.min(by0 + ext, (by0 + by1) / 2);
-        const y1 = Math.max(by1 - ext, (by0 + by1) / 2);
+        const x0 = Math.min(g.x0 + ext, (g.x0 + g.x1) / 2);
+        const x1 = Math.max(g.x1 - ext, (g.x0 + g.x1) / 2);
+        const y0 = Math.min(g.y0 + ext, (g.y0 + g.y1) / 2);
+        const y1 = Math.max(g.y1 - ext, (g.y0 + g.y1) / 2);
         for (let cy = y0; cy <= y1 + 1e-6; cy += step)
           for (let cx = x0; cx <= x1 + 1e-6; cx += step) {
             const quad = squareQuad(cx, cy, size, rot);
-            keepBest(best, { score: gridScore(coarse, 0, quad, 12, 1, OUTSIDE_ALL), cx, cy, size, shape: quad }, 9);
+            keepBest(best, { score: gridScore(coarse, 0, quad, 12, 1, OUTSIDE_ALL), cx, cy, size, shape: quad }, keep);
           }
       }
     }
-    let top: { quad: Quad; score: number } | null = null;
-    for (const c of best) {
-      const r = refinePoints(fine, c.shape, (p) => [[p[0] as Point, p[1] as Point, p[2] as Point, p[3] as Point]], c.size / 14, [OUTSIDE_ALL], 0, 20);
-      if (!top || r.score > top.score) top = { quad: r.points as Quad, score: r.score };
+  }
+  let top: { quad: Quad; score: number } | null = null;
+  for (const c of best) {
+    const r = refinePoints(fine, c.shape, (p) => [[p[0] as Point, p[1] as Point, p[2] as Point, p[3] as Point]], c.size / 14, [OUTSIDE_ALL], 0, 20);
+    if (!top || r.score > top.score) top = { quad: r.points as Quad, score: r.score };
+  }
+  return top && Number.isFinite(top.score) ? top : null;
+}
+
+/** The coarse search cannot tell a grid from the same grid one sticker over, so those are tested directly. */
+export function shiftTestFace(fine: EdgeMap, start: { quad: Quad; score: number }, rounds: number): { quad: Quad; score: number } {
+  let top = start;
+  for (let round = 0; round < rounds; round++) {
+    const h = squareToQuad(top.quad);
+    let better: { quad: Quad; score: number } | null = null;
+    for (let dv = -1; dv <= 1; dv++)
+      for (let du = -1; du <= 1; du++) {
+        if (!du && !dv) continue;
+        const shifted = [applyMat3(h, du / 6, dv / 6), applyMat3(h, 1 + du / 6, dv / 6), applyMat3(h, 1 + du / 6, 1 + dv / 6), applyMat3(h, du / 6, 1 + dv / 6)];
+        const side = Math.hypot((shifted[1] as Point).x - (shifted[0] as Point).x, (shifted[1] as Point).y - (shifted[0] as Point).y);
+        const r = refinePoints(fine, shifted, (p) => [[p[0] as Point, p[1] as Point, p[2] as Point, p[3] as Point]], side / 40, [OUTSIDE_ALL], 1, 20);
+        if (r.score > top.score && (!better || r.score > better.score)) better = { quad: r.points as Quad, score: r.score };
+      }
+    if (!better) break;
+    top = better;
+  }
+  return top;
+}
+
+export interface FaceFind {
+  quad: Quad;
+  /** Raw grid score: about 0.5 to 0.7 for a well-placed outline on a sharp photo. */
+  score: number;
+  confidence: number;
+  /** False when nothing was found and the quad is the centred default. */
+  found: boolean;
+}
+
+/** detectFaceQuad with options and the raw score. */
+export function findFace(image: ImageLike, options: FindOptions = {}): FaceFind {
+  const fallback: FaceFind = { quad: centredSquareQuad(image.width, image.height), score: 0, confidence: 0, found: false };
+  try {
+    if (!(image.width >= 24 && image.height >= 24)) return fallback;
+    const quick = !!options.quick;
+    const { coarse, fine } = edgeMaps(image, 190, quick ? 300 : 440);
+    const short = Math.min(image.width, image.height);
+    const rotations = quick ? [-12, 0, 12] : [-16, -8, 0, 8, 16];
+    const keep = quick ? 4 : 9;
+    const full: FaceRegion = { x0: 0, y0: 0, x1: image.width, y1: image.height, minSize: 0.26 * short, maxSize: short };
+    const colourful = colourfulHull(image);
+    const hull = colourful || foregroundHull(image);
+    const regions: FaceRegion[] = [];
+    const seeds: { quad: Quad; size: number }[] = [];
+    if (hull) {
+      const h = faceRegionOfHull(image, hull);
+      regions.push(h.region);
+      if (h.seed) seeds.push(h.seed);
+    } else if (!options.near) regions.push(full);
+    if (options.near) {
+      const n = options.near;
+      const reach = 0.85 * n.size;
+      regions.push({ x0: Math.max(0, n.cx - reach), y0: Math.max(0, n.cy - reach), x1: Math.min(image.width, n.cx + reach), y1: Math.min(image.height, n.cy + reach), minSize: Math.max(0.2 * short, 0.6 * n.size), maxSize: Math.min(short, 1.3 * n.size) });
+    }
+    let top = searchFace(coarse, fine, regions, seeds, rotations, keep);
+    if (!quick && (!top || top.score < RETRY_BELOW)) {
+      const wider: { regions: FaceRegion[]; seeds: { quad: Quad; size: number }[] }[] = [];
+      const other = colourful ? foregroundHull(image) : null;
+      if (other) {
+        const h = faceRegionOfHull(image, other);
+        wider.push({ regions: [h.region], seeds: h.seed ? [h.seed] : [] });
+      }
+      if (hull) wider.push({ regions: [full], seeds: [] });
+      for (const w of wider) {
+        const r = searchFace(coarse, fine, w.regions, w.seeds, rotations, keep);
+        if (r && (!top || r.score > top.score)) top = r;
+        if (top && top.score >= RETRY_BELOW) break;
+      }
     }
     if (!top || !Number.isFinite(top.score) || top.score <= 0) return fallback;
-    // The coarse search cannot tell a grid from the same grid one sticker over, so test those directly.
-    for (let round = 0; round < 3; round++) {
-      const h = squareToQuad(top.quad);
-      let better: { quad: Quad; score: number } | null = null;
-      for (let dv = -1; dv <= 1; dv++)
-        for (let du = -1; du <= 1; du++) {
-          if (!du && !dv) continue;
-          const shifted = [applyMat3(h, du / 6, dv / 6), applyMat3(h, 1 + du / 6, dv / 6), applyMat3(h, 1 + du / 6, 1 + dv / 6), applyMat3(h, du / 6, 1 + dv / 6)];
-          const side = Math.hypot((shifted[1] as Point).x - (shifted[0] as Point).x, (shifted[1] as Point).y - (shifted[0] as Point).y);
-          const r = refinePoints(fine, shifted, (p) => [[p[0] as Point, p[1] as Point, p[2] as Point, p[3] as Point]], side / 40, [OUTSIDE_ALL], 1, 20);
-          if (r.score > top.score && (!better || r.score > better.score)) better = { quad: r.points as Quad, score: r.score };
-        }
-      if (!better) break;
-      top = better;
-    }
-    return { quad: top.quad, confidence: confidenceOf(top.score) };
+    top = shiftTestFace(fine, top, quick ? 1 : 3);
+    return { quad: top.quad, score: top.score, confidence: confidenceOf(top.score), found: true };
   } catch {
     return fallback;
   }
+}
+
+/** Outline of the 6x6 sticker area of a face photographed roughly straight on. */
+export function detectFaceQuad(image: ImageLike): { quad: Quad; confidence: number } {
+  const r = findFace(image);
+  return { quad: r.quad, confidence: r.confidence };
 }
 
 /**
@@ -488,17 +576,66 @@ function outlineScore(edge: EdgeMap, level: number, outline: readonly Point[], l
   return s / 3;
 }
 
+/** The corner outline the guide shows: a cube seen from 38 degrees above, its silhouette size wide, centred on (cx, cy). */
+export function guideCornerOutline(cx: number, cy: number, size: number): CornerOutline {
+  return projectCornerView(0.66, 0, 0, 7).map((p) => ({ x: cx + p.x * size, y: cy + p.y * size })) as CornerOutline;
+}
+
 function defaultOutline(image: ImageLike): CornerOutline {
   const size = Math.min(image.width, image.height) * 0.7;
   return projectCornerView(0.7, 0, 0, 7).map((p) => ({ x: image.width / 2 + p.x * size, y: image.height / 2 + p.y * size })) as CornerOutline;
 }
 
-/** Outline of a cube photographed corner-on (three faces visible, one of them on top). */
-export function detectCornerOutline(image: ImageLike): { outline: CornerOutline; confidence: number } {
-  const fallback = { outline: defaultOutline(image), confidence: 0 };
+export interface CornerFind {
+  outline: CornerOutline;
+  score: number;
+  confidence: number;
+  found: boolean;
+}
+
+const cornerQuadsOf = (p: Point[]): Quad[] => cornerQuads(p as CornerOutline);
+
+/**
+ * A far corner hidden by a white sticker on white paper leaves one point stranded, and the search can
+ * settle one sticker off along a cube edge: test each far corner against where the other six points
+ * say it must be, and the same outline moved by one sticker along each cube edge direction.
+ */
+export function verifyCorner(fine: EdgeMap, start: { outline: CornerOutline; score: number }, short: number, shiftRounds: number): { outline: CornerOutline; score: number } {
+  let top = start;
+  for (const which of [1, 3, 5] as const) {
+    const p = predictFarCorner(top.outline, which);
+    if (!p || Math.hypot(p.x - top.outline[which].x, p.y - top.outline[which].y) < short / 60) continue;
+    const alt = top.outline.map((q, i) => (i === which ? p : q));
+    const r = refinePoints(fine, alt, cornerQuadsOf, short / 80, CORNER_OUTSIDE, 1, 20);
+    if (r.score > top.score) top = { outline: r.points as CornerOutline, score: r.score };
+  }
+  for (let round = 0; round < shiftRounds; round++) {
+    const camera = fitCubeCamera(top.outline);
+    if (!camera) break;
+    let better: { outline: CornerOutline; score: number } | null = null;
+    for (let axis = 0; axis < 3; axis++)
+      for (const dir of [-1, 1]) {
+        const shifted = OUTLINE_VERTICES.map((v) => {
+          const q = [v[0] as number, v[1] as number, v[2] as number];
+          q[axis] = (q[axis] as number) + dir / 3;
+          return camera(q[0] as number, q[1] as number, q[2] as number);
+        });
+        const r = refinePoints(fine, shifted, cornerQuadsOf, short / 100, CORNER_OUTSIDE, 1, 20);
+        if (r.score > top.score && (!better || r.score > better.score)) better = { outline: r.points as CornerOutline, score: r.score };
+      }
+    if (!better) break;
+    top = better;
+  }
+  return top;
+}
+
+/** detectCornerOutline with options and the raw score. */
+export function findCorner(image: ImageLike, options: FindOptions = {}): CornerFind {
+  const fallback: CornerFind = { outline: defaultOutline(image), score: 0, confidence: 0, found: false };
   try {
     if (!(image.width >= 24 && image.height >= 24)) return fallback;
-    const { coarse, fine } = edgeMaps(image, 210, 460);
+    const quick = !!options.quick;
+    const { coarse, fine } = edgeMaps(image, 210, quick ? 320 : 460);
     const short = Math.min(image.width, image.height);
     const d2r = Math.PI / 180;
     const place = (shape: Point[], cx: number, cy: number, size: number): Point[] => shape.map((p) => ({ x: cx + p.x * size, y: cy + p.y * size }));
@@ -519,24 +656,28 @@ export function detectCornerOutline(image: ImageLike): { outline: CornerOutline;
       const size = Math.max(...xs) - Math.min(...xs);
       located.push({ score: 1, cx: (Math.max(...xs) + Math.min(...xs)) / 2, cy: (Math.max(...ys) + Math.min(...ys)) / 2, size, shape: [] });
     }
+    if (options.near) located.push({ score: 1, cx: options.near.cx, cy: options.near.cy, size: options.near.size, shape: [] });
     const poses = [28, 38, 48].map((el) => projectCornerView(el * d2r, 0, 0, 7));
-    for (let size = located.length ? Infinity : 0.36 * short; size <= 1.0 * short; size *= 1.1) {
-      const step = size / 13;
-      for (const shape of poses) {
-        const ys = shape.map((p) => p.y);
-        const top = -Math.min(...ys) * size;
-        const bottom = Math.max(...ys) * size;
-        const x0 = Math.min(size / 2, image.width / 2);
-        const x1 = Math.max(image.width - size / 2, image.width / 2);
-        const y0 = Math.min(top, image.height / 2);
-        const y1 = Math.max(image.height - bottom, image.height / 2);
-        for (let cy = y0; cy <= y1 + 1e-6; cy += step)
-          for (let cx = x0; cx <= x1 + 1e-6; cx += step) keepBest(located, { score: outlineScore(coarse, 0, place(shape, cx, cy, size), 8, 1), cx, cy, size, shape }, 6);
+    const slide = (list: Candidate<Point[]>[], limit: number): void => {
+      for (let size = 0.36 * short; size <= 1.0 * short; size *= 1.1) {
+        const step = size / 13;
+        for (const shape of poses) {
+          const ys = shape.map((p) => p.y);
+          const top = -Math.min(...ys) * size;
+          const bottom = Math.max(...ys) * size;
+          const x0 = Math.min(size / 2, image.width / 2);
+          const x1 = Math.max(image.width - size / 2, image.width / 2);
+          const y0 = Math.min(top, image.height / 2);
+          const y1 = Math.max(image.height - bottom, image.height / 2);
+          for (let cy = y0; cy <= y1 + 1e-6; cy += step)
+            for (let cx = x0; cx <= x1 + 1e-6; cx += step) keepBest(list, { score: outlineScore(coarse, 0, place(shape, cx, cy, size), 8, 1), cx, cy, size, shape }, limit);
+        }
       }
-    }
+    };
+    const hinted = located.length > 0;
+    if (!hinted) slide(located, 6);
     // Stage 2: pose, size and position around each location, by coordinate ascent.
-    const posed: Candidate<Point[]>[] = [];
-    for (const loc of located) {
+    const poseSearch = (loc: Candidate<Point[]>): Candidate<Point[]> => {
       // el, swing, roll (degrees), distance, log size, x, y (in units of the size)
       const theta = [38, 0, 0, 7, 0, 0, 0];
       const steps = [8, 8, 6, 1.5, 0.08, 0.05, 0.05];
@@ -565,46 +706,40 @@ export function detectCornerOutline(image: ImageLike): { outline: CornerOutline;
         }
         for (let i = 0; i < steps.length; i++) steps[i] = (steps[i] as number) / 2;
       }
-      posed.push({ score: bestScore, cx: loc.cx, cy: loc.cy, size: loc.size * Math.exp(theta[4] as number), shape: build(theta) });
-    }
-    posed.sort((a, b) => b.score - a.score);
+      return { score: bestScore, cx: loc.cx, cy: loc.cy, size: loc.size * Math.exp(theta[4] as number), shape: build(theta) };
+    };
     // Stage 3: free refinement of the seven points.
     let top: { outline: CornerOutline; score: number } | null = null;
-    const starts = direct.map((shape) => ({ shape, size: short / 2 })).concat(posed.slice(0, 3));
-    for (const c of starts) {
-      const r = refinePoints(fine, c.shape, (p) => cornerQuads(p as CornerOutline), c.size / 30, CORNER_OUTSIDE, 0, 20);
-      if (!top || r.score > top.score) top = { outline: r.points as CornerOutline, score: r.score };
+    const refineStarts = (starts: readonly { shape: Point[]; size: number }[]): void => {
+      for (const c of starts) {
+        const r = refinePoints(fine, c.shape, cornerQuadsOf, c.size / 30, CORNER_OUTSIDE, 0, 20);
+        if (!top || r.score > top.score) top = { outline: r.points as CornerOutline, score: r.score };
+      }
+    };
+    const posed = located.map(poseSearch).sort((a, b) => b.score - a.score);
+    refineStarts(direct.map((shape) => ({ shape, size: short / 2 })).concat(posed.slice(0, quick ? 2 : 3)));
+    if (hinted && !quick && (!top || (top as { score: number }).score < RETRY_BELOW)) {
+      // The blobs did not lead to a convincing outline (a cluttered table, for one): look everywhere.
+      const more: Candidate<Point[]>[] = [];
+      slide(more, 12);
+      refineStarts(
+        more
+          .map(poseSearch)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5),
+      );
     }
-    if (!top || !Number.isFinite(top.score) || top.score <= 0) return fallback;
-    // A far corner hidden by a white sticker on white paper leaves one point stranded: test each far
-    // corner against where the other six points say it must be.
-    for (const which of [1, 3, 5] as const) {
-      const p = predictFarCorner(top.outline, which);
-      if (!p || Math.hypot(p.x - top.outline[which].x, p.y - top.outline[which].y) < short / 60) continue;
-      const alt = top.outline.map((q, i) => (i === which ? p : q));
-      const r = refinePoints(fine, alt, (pts) => cornerQuads(pts as CornerOutline), short / 80, CORNER_OUTSIDE, 1, 20);
-      if (r.score > top.score) top = { outline: r.points as CornerOutline, score: r.score };
-    }
-    // And test the same outline moved by one sticker along each cube edge direction.
-    for (let round = 0; round < 4; round++) {
-      const camera = fitCubeCamera(top.outline);
-      if (!camera) break;
-      let better: { outline: CornerOutline; score: number } | null = null;
-      for (let axis = 0; axis < 3; axis++)
-        for (const dir of [-1, 1]) {
-          const shifted = OUTLINE_VERTICES.map((v) => {
-            const q = [v[0] as number, v[1] as number, v[2] as number];
-            q[axis] = (q[axis] as number) + dir / 3;
-            return camera(q[0] as number, q[1] as number, q[2] as number);
-          });
-          const r = refinePoints(fine, shifted, (pts) => cornerQuads(pts as CornerOutline), short / 100, CORNER_OUTSIDE, 1, 20);
-          if (r.score > top.score && (!better || r.score > better.score)) better = { outline: r.points as CornerOutline, score: r.score };
-        }
-      if (!better) break;
-      top = better;
-    }
-    return { outline: top.outline, confidence: confidenceOf(top.score) };
+    let best = top as { outline: CornerOutline; score: number } | null;
+    if (!best || !Number.isFinite(best.score) || best.score <= 0) return fallback;
+    best = verifyCorner(fine, best, short, quick ? 1 : 4);
+    return { outline: best.outline, score: best.score, confidence: confidenceOf(best.score), found: true };
   } catch {
     return fallback;
   }
+}
+
+/** Outline of a cube photographed corner-on (three faces visible, one of them on top). */
+export function detectCornerOutline(image: ImageLike): { outline: CornerOutline; confidence: number } {
+  const r = findCorner(image);
+  return { outline: r.outline, confidence: r.confidence };
 }

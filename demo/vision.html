@@ -32,6 +32,11 @@
       .legend span { display: inline-flex; align-items: center; gap: 6px; }
       .legend b { width: 18px; height: 18px; border-radius: 4px; display: inline-block; border: 1px solid var(--border); }
       #status { font-family: var(--mono); font-size: 13px; color: var(--text-dim); white-space: pre-wrap; }
+      #camera-host:not(:empty) { height: min(64vh, 620px); }
+      #readout-host:not(:empty) { height: min(56vh, 460px); margin-top: 8px; }
+      #live-status { font-size: 18px; font-weight: 600; color: var(--text); min-height: 1.4em; margin: 6px 0; }
+      body.bare main > :not(#edit-panel) { display: none; }
+      body.bare #edit-panel > .row, body.bare #edit-note, body.bare #sampled, body.bare #editor-host { display: none; }
       [hidden] { display: none !important; }
     </style>
   </head>
@@ -57,7 +62,9 @@
           <button id="detect">Auto-detect</button>
           <button id="snap">Snap to grid</button>
         </div>
+        <p id="live-status" role="status" aria-live="polite"></p>
         <div id="camera-host"></div>
+        <div id="readout-host"></div>
         <div id="editor-host"></div>
         <p id="edit-note"></p>
         <div class="grids" style="margin-top: 10px" id="sampled"></div>
@@ -73,14 +80,15 @@
     </main>
     <script type="module">
       import {
-        CameraCapture, OutlineEditor, QuadEditor, TWO_SHOT_VIEWS, assembleCornerShots, centredSquareQuad, classifyCube, detectCornerOutline,
-        detectFaceQuad, imageDataToCanvas, loadImageFile, sampleCornerShot, sampleFace, snapOutline, snapQuad, toImageData,
+        CameraCapture, OutlineEditor, QuadEditor, ReadoutView, TWO_SHOT_VIEWS, OUTLINE_SURE, assembleCornerShots, centredSquareQuad, classifyCube, classifyPartial,
+        cornerFaces, detectCornerOutline, detectFaceQuad, imageDataToCanvas, loadImageFile, readingFor, sampleCornerShot, sampleFace, snapOutline, snapQuad, toImageData,
       } from '../src/vision/index.ts';
 
       const FACES = ['U top', 'R right', 'F front', 'D bottom', 'L left', 'B back'];
       const CORNERS = ['Corner 1: U on top, F left, R right', 'Corner 2: D on top, L left, B right'];
       const $ = (id) => document.getElementById(id);
-      const state = { mode: 'face', slots: [], current: -1, editor: null, camera: null };
+      const state = { mode: 'face', slots: [], current: -1, editor: null, camera: null, readout: null };
+      const query = new URLSearchParams(location.search);
 
       function setMode(mode) {
         state.mode = mode;
@@ -123,6 +131,30 @@
         state.editor = null;
         if (state.camera) state.camera.destroy();
         state.camera = null;
+        if (state.readout) state.readout.destroy();
+        state.readout = null;
+        $('live-status').textContent = '';
+      }
+
+      // The faces captured so far as six slots (U R F D L B), for the provisional reading.
+      function capturedFaces() {
+        const faces = [null, null, null, null, null, null];
+        if (state.mode === 'face') state.slots.forEach((s, i) => (faces[i] = s.image ? s.samples?.[0] ?? sampleFace(s.image, s.shape) : null));
+        else state.slots.forEach((s, i) => { if (s.image) for (const f of cornerFaces(s.image, s.shape, TWO_SHOT_VIEWS[i], s.samples)) faces[f.face] = f.sample; });
+        return faces;
+      }
+
+      // What was read from the current photo, drawn on the photo.
+      function showReadout() {
+        const slot = state.slots[state.current];
+        if (state.readout) state.readout.destroy();
+        state.readout = null;
+        if (!slot || !slot.image) return;
+        const partial = classifyPartial(capturedFaces());
+        const shots = state.mode === 'face' ? [{ face: state.current, quad: slot.shape }] : cornerFaces(slot.image, slot.shape, TWO_SHOT_VIEWS[state.current], slot.samples);
+        state.readout = new ReadoutView($('readout-host'), { onCellTap: (face, cell) => ($('status').textContent = 'tapped face ' + face + ' cell ' + cell) });
+        state.readout.setReading(readingFor(slot.image, shots, partial));
+        window.visionDemoPartial = { groups: shots.map((sh) => Array.from(partial.faces[sh.face].groups)), confidence: shots.map((sh) => Array.from(partial.faces[sh.face].confidence)), palette: partial.palette, names: partial.names, unsure: state.readout.unsureCount() };
       }
 
       function openSlot(i) {
@@ -130,7 +162,6 @@
         closeEditor();
         $('edit-panel').hidden = false;
         $('edit-title').textContent = state.slots[i].name;
-        $('camera').hidden = state.mode !== 'face';
         renderSlots();
         showEditor();
       }
@@ -141,11 +172,12 @@
         state.editor = null;
         $('sampled').replaceChildren();
         if (!slot || !slot.image) {
-          $('edit-note').textContent = 'No photo yet: upload one' + (state.mode === 'face' ? ' or use the camera.' : '.');
+          $('edit-note').textContent = 'No photo yet: upload one or use the camera.';
           return;
         }
         const onChange = (shape) => {
           slot.shape = shape;
+          slot.samples = undefined; // the camera's samples belong to the outline it found
           showSamples();
         };
         state.editor = state.mode === 'face' ? new QuadEditor($('editor-host'), slot.canvas, slot.shape, onChange) : new OutlineEditor($('editor-host'), slot.canvas, slot.shape, onChange);
@@ -210,20 +242,53 @@
           $('edit-note').textContent = err.message;
         }
       });
-      $('camera').addEventListener('click', async () => {
+      // Live camera: finds the cube, takes the photo by itself, then shows what was read on the photo.
+      // The grips (the outline editor) are only worth showing when frame.confidence is below OUTLINE_SURE.
+      async function openCamera() {
         if (state.current < 0) return;
         closeEditor();
-        state.camera = new CameraCapture($('camera-host'), { onError: (m) => ($('edit-note').textContent = m) });
-        await state.camera.start();
+        const live = (window.visionLive = { statuses: [], frame: null, started: performance.now(), capturedAt: 0, stats: null, error: null });
+        const avoid = capturedFaces().filter(Boolean);
+        state.camera = new CameraCapture($('camera-host'), {
+          mode: state.mode,
+          auto: query.get('auto') !== '0',
+          live: true,
+          worker: query.get('worker') !== '0',
+          avoid: query.get('avoid') === '0' ? [] : avoid,
+          onError: (m) => { $('edit-note').textContent = m; live.error = m; },
+          onStatus: (s) => {
+            $('live-status').textContent = s.hint;
+            live.statuses.push({ t: Math.round(performance.now() - live.started), state: s.state, code: s.code, progress: +s.progress.toFixed(2), confidence: +s.confidence.toFixed(2) });
+          },
+        });
+        const camera = state.camera;
+        await camera.start();
+        live.opened = performance.now();
         try {
-          const frame = await state.camera.capture();
-          state.camera.destroy();
+          const frame = await camera.capture();
+          live.capturedAt = performance.now();
+          live.stats = camera.liveStats();
+          live.frame = {
+            mode: frame.mode, auto: frame.auto, source: frame.source, confidence: frame.confidence, width: frame.image.width, height: frame.image.height,
+            points: (frame.outline || frame.quad).map((p) => [p.x, p.y]),
+            hadSamples: !!frame.samples,
+            // What the camera read (merged over the steady frames), and the same stickers read from the one photo it returned.
+            samples: (frame.samples || (frame.outline ? sampleCornerShot(frame.image, frame.outline) : [sampleFace(frame.image, frame.quad)])).map((f) => ({ rgb: Array.from(f.rgb), quality: Array.from(f.quality) })),
+            single: (frame.outline ? sampleCornerShot(frame.image, frame.outline) : [sampleFace(frame.image, frame.quad)]).map((f) => ({ rgb: Array.from(f.rgb), quality: Array.from(f.quality) })),
+          };
+          camera.destroy();
           state.camera = null;
-          await setImage(frame.image, frame.quad);
+          const slot = state.slots[state.current];
+          slot.samples = frame.samples;
+          await setImage(frame.image, frame.outline || frame.quad);
+          $('live-status').textContent = frame.confidence < OUTLINE_SURE ? 'The outline is unsure: check the grips below.' : 'Read ' + (frame.auto ? 'automatically' : 'from your photo') + '.';
+          showReadout();
+          live.done = true;
         } catch {
           /* closed */
         }
-      });
+      }
+      $('camera').addEventListener('click', openCamera);
       $('detect').addEventListener('click', () => autoDetect());
       $('snap').addEventListener('click', () => {
         const slot = state.slots[state.current];
@@ -286,6 +351,12 @@
       window.visionDemoImageSize = () => (state.slots[state.current] && state.slots[state.current].image ? { width: state.slots[state.current].image.width, height: state.slots[state.current].image.height } : null);
       const params = new URLSearchParams(location.search);
       setMode(params.get('mode') === 'corner' ? 'corner' : 'face');
+      // ?live=1 opens the camera at once on a bare page (used by tools/synth/camera-eval.ts); &slot=N picks the slot.
+      if (params.get('live')) {
+        document.body.classList.add('bare');
+        openSlot(Number(params.get('slot') || 0));
+        openCamera();
+      }
       if (params.get('set')) loadSet(params.get('set')).then(() => (window.visionDemoReady = true)).catch((e) => ($('status').textContent = 'could not load set: ' + e.message));
       else window.visionDemoReady = true;
     </script>

@@ -102,6 +102,8 @@ function backgroundTexture(bg: ShotParams['background']): THREE.CanvasTexture {
   return tex;
 }
 
+const LIN_TABLE = Float64Array.from({ length: 256 }, (_, v) => Math.pow(v / 255, 2.2));
+
 const roundedBox = new RoundedBoxGeometry(0.985, 0.985, 0.985, 3, 0.11);
 const stickerShape = (() => {
   const s = 0.42;
@@ -194,7 +196,7 @@ function stageBasis(p: ShotParams): THREE.Matrix4 {
   return new THREE.Matrix4().makeBasis(ex, ey, ez);
 }
 
-async function renderShot(p: ShotParams): Promise<ShotResult> {
+async function renderFrames(p: ShotParams, cameras: ShotParams['camera'][]): Promise<ShotResult[]> {
   const disposables: { dispose(): void }[] = [];
   renderer.setSize(p.width, p.height, false);
   const scene = new THREE.Scene();
@@ -250,32 +252,38 @@ async function renderShot(p: ShotParams): Promise<ShotResult> {
   // Camera.
   const cam = new THREE.PerspectiveCamera(p.camera.fovDeg, p.width / p.height, 3, 200);
   const d2r = Math.PI / 180;
-  let eye: THREE.Vector3;
-  let up: THREE.Vector3;
-  let centre: THREE.Vector3;
-  if (p.kind === 'face') {
-    const t = p.camera.tiltDeg * d2r;
-    const az = p.camera.tiltAzimuthDeg * d2r;
-    centre = new THREE.Vector3(0, 0, 3);
-    eye = new THREE.Vector3(Math.sin(t) * Math.cos(az), Math.sin(t) * Math.sin(az), Math.cos(t)).multiplyScalar(p.camera.distance).add(centre);
-    up = new THREE.Vector3(0, 1, 0);
-  } else {
-    const el = p.camera.elevationDeg * d2r;
-    const sw = (45 + p.camera.swingDeg) * d2r;
-    centre = new THREE.Vector3(0, 0, 0);
-    eye = new THREE.Vector3(Math.cos(el) * Math.sin(sw), Math.sin(el), Math.cos(el) * Math.cos(sw)).multiplyScalar(p.camera.distance);
-    up = new THREE.Vector3(0, 1, 0);
-  }
-  const forward = centre.clone().sub(eye).normalize();
-  const right = forward.clone().cross(up).normalize();
-  const camUp = right.clone().cross(forward).normalize();
-  const aim = centre.clone().addScaledVector(right, p.camera.aimX).addScaledVector(camUp, p.camera.aimY);
-  const rolledUp = camUp.clone().applyAxisAngle(forward, p.camera.rollDeg * d2r);
   const toWorld = (v: THREE.Vector3) => v.clone().applyMatrix4(basis);
-  cam.position.copy(toWorld(eye));
-  cam.up.copy(rolledUp.clone().transformDirection(basis));
-  cam.lookAt(toWorld(aim));
-  cam.updateMatrixWorld(true);
+  /** Points the camera as the given camera parameters say and returns where it stands (stage coordinates). */
+  const aimCamera = (c: ShotParams['camera']): THREE.Vector3 => {
+    let eye: THREE.Vector3;
+    let centre: THREE.Vector3;
+    const up = new THREE.Vector3(0, 1, 0);
+    if (p.kind === 'face') {
+      const t = c.tiltDeg * d2r;
+      const az = c.tiltAzimuthDeg * d2r;
+      centre = new THREE.Vector3(0, 0, 3);
+      eye = new THREE.Vector3(Math.sin(t) * Math.cos(az), Math.sin(t) * Math.sin(az), Math.cos(t)).multiplyScalar(c.distance).add(centre);
+    } else {
+      const el = c.elevationDeg * d2r;
+      const sw = (45 + c.swingDeg) * d2r;
+      centre = new THREE.Vector3(0, 0, 0);
+      eye = new THREE.Vector3(Math.cos(el) * Math.sin(sw), Math.sin(el), Math.cos(el) * Math.cos(sw)).multiplyScalar(c.distance);
+    }
+    const forward = centre.clone().sub(eye).normalize();
+    const right = forward.clone().cross(up).normalize();
+    const camUp = right.clone().cross(forward).normalize();
+    const aim = centre.clone().addScaledVector(right, c.aimX).addScaledVector(camUp, c.aimY);
+    const rolledUp = camUp.clone().applyAxisAngle(forward, c.rollDeg * d2r);
+    cam.fov = c.fovDeg;
+    cam.updateProjectionMatrix();
+    cam.position.copy(toWorld(eye));
+    cam.up.copy(rolledUp.clone().transformDirection(basis));
+    cam.lookAt(toWorld(aim));
+    cam.updateMatrixWorld(true);
+    return eye;
+  };
+  // The lamps stay where the first camera position puts them, so a reflection moves when the camera does.
+  const eye = aimCamera(p.camera);
 
   if (p.light.lamp) {
     const lamp = new THREE.PointLight(rgbColor(p.light.lamp.color), p.light.lamp.intensity * Math.PI * 100, 0, 2);
@@ -300,77 +308,100 @@ async function renderShot(p: ShotParams): Promise<ShotResult> {
     stage.add(lamp);
   }
 
-  renderer.render(scene, cam);
-
-  // True outline in pixels.
-  const project = (s: readonly number[]): number[] => {
-    const w = toWorld(v3(s)).project(cam);
-    return [((w.x + 1) / 2) * p.width, ((1 - w.y) / 2) * p.height];
-  };
-  const result: ShotResult = { dataUrl: '' };
-  if (p.kind === 'face') {
-    result.quad = [
-      [-3, 3, 3],
-      [3, 3, 3],
-      [3, -3, 3],
-      [-3, -3, 3],
-    ].map(project);
-  } else {
-    result.outline = [
-      [3, 3, 3],
-      [-3, 3, -3],
-      [3, 3, -3],
-      [3, -3, -3],
-      [3, -3, 3],
-      [-3, -3, 3],
-      [-3, 3, 3],
-    ].map(project);
-  }
-
-  // Camera pipeline: blur, exposure, white balance, vignette-like gradient, sensor noise, JPEG.
+  const results: ShotResult[] = [];
   post.width = p.width;
   post.height = p.height;
   const g = post.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
-  g.filter = p.post.blurPx > 0.05 ? 'blur(' + p.post.blurPx.toFixed(2) + 'px)' : 'none';
-  g.drawImage(renderer.domElement, 0, 0);
-  g.filter = 'none';
-  const img = g.getImageData(0, 0, p.width, p.height);
-  const data = img.data;
-  const rnd = mulberry32(p.seed ^ 0xa5a5);
-  const gauss = () => {
-    let u = 0;
-    while (u === 0) u = rnd();
-    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd());
-  };
-  const ga = p.post.gradient.angleDeg * d2r;
-  const gx = Math.cos(ga);
-  const gy = Math.sin(ga);
-  const half = Math.hypot(p.width, p.height) / 2;
-  const toLin = (v: number) => Math.pow(v / 255, 2.2);
-  const toSrgb = (v: number) => 255 * Math.pow(Math.max(0, Math.min(1, v)), 1 / 2.2);
-  for (let y = 0; y < p.height; y++) {
-    for (let x = 0; x < p.width; x++) {
-      const o = (y * p.width + x) * 4;
-      const t = ((x - p.width / 2) * gx + (y - p.height / 2) * gy) / half;
-      const shade = p.post.gain * (1 + p.post.gradient.strength * t);
-      for (let c = 0; c < 3; c++) {
-        const lin = toLin(data[o + c] as number) * shade * (p.post.whiteBalance[c] as number);
-        data[o + c] = toSrgb(lin) + (p.post.noiseSigma > 0 ? gauss() * p.post.noiseSigma : 0);
+  for (let index = 0; index < cameras.length; index++) {
+    aimCamera(cameras[index] as ShotParams['camera']);
+    renderer.render(scene, cam);
+
+    // True outline in pixels.
+    const project = (s: readonly number[]): number[] => {
+      const w = toWorld(v3(s)).project(cam);
+      return [((w.x + 1) / 2) * p.width, ((1 - w.y) / 2) * p.height];
+    };
+    const result: ShotResult = { dataUrl: '' };
+    if (p.kind === 'face') {
+      result.quad = [
+        [-3, 3, 3],
+        [3, 3, 3],
+        [3, -3, 3],
+        [-3, -3, 3],
+      ].map(project);
+    } else {
+      result.outline = [
+        [3, 3, 3],
+        [-3, 3, -3],
+        [3, 3, -3],
+        [3, -3, -3],
+        [3, -3, 3],
+        [-3, -3, 3],
+        [-3, 3, 3],
+      ].map(project);
+    }
+
+    // Camera pipeline: blur, exposure, white balance, vignette-like gradient, sensor noise, JPEG.
+    g.filter = p.post.blurPx > 0.05 ? 'blur(' + p.post.blurPx.toFixed(2) + 'px)' : 'none';
+    g.drawImage(renderer.domElement, 0, 0);
+    g.filter = 'none';
+    const img = g.getImageData(0, 0, p.width, p.height);
+    const data = img.data;
+    // Every frame of a clip has its own sensor noise; frame 0 has the noise of the single photo.
+    const rnd = mulberry32((p.seed ^ 0xa5a5) + index * 7919);
+    const gauss = () => {
+      let u = 0;
+      while (u === 0) u = rnd();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd());
+    };
+    const ga = p.post.gradient.angleDeg * d2r;
+    const gx = Math.cos(ga);
+    const gy = Math.sin(ga);
+    const half = Math.hypot(p.width, p.height) / 2;
+    // Canvas pixels are whole numbers, so a table gives the same values as the power function.
+    const toLin = (v: number) => LIN_TABLE[v] as number;
+    const toSrgb = (v: number) => 255 * Math.pow(Math.max(0, Math.min(1, v)), 1 / 2.2);
+    for (let y = 0; y < p.height; y++) {
+      for (let x = 0; x < p.width; x++) {
+        const o = (y * p.width + x) * 4;
+        const t = ((x - p.width / 2) * gx + (y - p.height / 2) * gy) / half;
+        const shade = p.post.gain * (1 + p.post.gradient.strength * t);
+        for (let c = 0; c < 3; c++) {
+          const lin = toLin(data[o + c] as number) * shade * (p.post.whiteBalance[c] as number);
+          data[o + c] = toSrgb(lin) + (p.post.noiseSigma > 0 ? gauss() * p.post.noiseSigma : 0);
+        }
       }
     }
+    g.putImageData(img, 0, 0);
+    result.dataUrl = p.post.jpegQuality > 0 ? post.toDataURL('image/jpeg', p.post.jpegQuality) : post.toDataURL('image/png');
+    results.push(result);
   }
-  g.putImageData(img, 0, 0);
-  result.dataUrl = p.post.jpegQuality > 0 ? post.toDataURL('image/jpeg', p.post.jpegQuality) : post.toDataURL('image/png');
   for (const d of disposables) d.dispose();
   renderer.renderLists.dispose();
-  return result;
+  return results;
+}
+
+/** One photo. */
+async function renderShot(p: ShotParams): Promise<ShotResult> {
+  return (await renderFrames(p, [p.camera]))[0] as ShotResult;
+}
+
+/**
+ * The frames of a video clip of one scene: the cube, the lights and the table stay put and the camera
+ * takes the given positions one after the other (hand shake, drift). p.camera is the position the
+ * lamps are set up for.
+ */
+async function renderClip(p: ShotParams, cameras: ShotParams['camera'][]): Promise<ShotResult[]> {
+  return renderFrames(p, cameras);
 }
 
 declare global {
   interface Window {
     renderShot: (p: ShotParams) => Promise<ShotResult>;
+    renderClip: (p: ShotParams, cameras: ShotParams['camera'][]) => Promise<ShotResult[]>;
     synthReady: boolean;
   }
 }
 window.renderShot = renderShot;
+window.renderClip = renderClip;
 window.synthReady = true;

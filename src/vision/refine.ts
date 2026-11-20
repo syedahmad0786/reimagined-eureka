@@ -189,21 +189,48 @@ export function refinePoints(
   lineSamples = LINE_SAMPLES,
 ): { points: Point[]; score: number } {
   const pts = start.map((p) => ({ x: p.x, y: p.y }));
+  // With several quads (a corner outline) moving one point leaves some quads as they were: their scores
+  // are kept from the last accepted position instead of being worked out again. The result is the same.
+  let baseCoords: number[][] = [];
+  let baseScores: number[] = [];
+  let baseLevel = -1;
+  let trialCoords: number[][] = [];
+  let trialScores: number[] = [];
   const total = (level: number): number => {
     let s = 0;
     const quads = quadsOf(pts);
+    if (level !== baseLevel) {
+      baseCoords = [];
+      baseScores = [];
+      baseLevel = level;
+    }
+    trialCoords = [];
+    trialScores = [];
+    let failed = false;
     for (let i = 0; i < quads.length; i++) {
-      const v = gridScore(edge, level, quads[i] as Quad, lineSamples, CELL_POINTS, outside[i] || 0);
-      if (v <= -1) return -1e9;
+      const q = quads[i] as Quad;
+      const coords = [q[0].x, q[0].y, q[1].x, q[1].y, q[2].x, q[2].y, q[3].x, q[3].y];
+      const b = baseCoords[i];
+      let v: number;
+      if (b && b[0] === coords[0] && b[1] === coords[1] && b[2] === coords[2] && b[3] === coords[3] && b[4] === coords[4] && b[5] === coords[5] && b[6] === coords[6] && b[7] === coords[7]) v = baseScores[i] as number;
+      else v = gridScore(edge, level, q, lineSamples, CELL_POINTS, outside[i] || 0);
+      trialCoords.push(coords);
+      trialScores.push(v);
+      if (v <= -1) failed = true;
       s += v;
     }
-    return s / quads.length;
+    return failed ? -1e9 : s / quads.length;
+  };
+  const accept = (): void => {
+    baseCoords = trialCoords;
+    baseScores = trialScores;
   };
   const minStep = 0.35 / edge.scale;
   let score = 0;
   for (let level = Math.min(startLevel, edge.levels.length - 1); level < edge.levels.length; level++) {
     let step = Math.max(minStep, maxShift / Math.pow(2, level - startLevel));
     score = total(level);
+    accept();
     let guard = 0;
     while (step >= minStep && guard++ < 200) {
       let improved = false;
@@ -216,6 +243,7 @@ export function refinePoints(
             if (s > score + 1e-6) {
               score = s;
               improved = true;
+              accept();
             } else {
               p[axis] = old;
             }
