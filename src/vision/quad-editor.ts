@@ -19,7 +19,7 @@ export class QuadEditor extends PointEditor {
   constructor(container: HTMLElement, image: EditorImage, quad: Quad, onChange: (quad: Quad) => void) {
     super(container, image, quad, (p) => onChange(p as Quad), {
       grids: (p) => [p as Quad],
-      gridColours: ['#7df9ff'],
+      gridColours: ['var(--accent, #7df9ff)'],
       gripDirection: (p, i) => {
         const c = centroid(p);
         return { x: (p[i] as Point).x - c.x, y: (p[i] as Point).y - c.y };

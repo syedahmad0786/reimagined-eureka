@@ -135,6 +135,54 @@ export function assembleCornerShots(shots: readonly CornerShot[]): (FaceSample |
   return faces;
 }
 
+/** One face of a corner shot as a cube face. */
+export interface CornerFace {
+  /** Cube face id 0..5 (U R F D L B). */
+  face: number;
+  /** The face outline in the photo, turned so that sampleFace(image, quad) reads the face in CONVENTIONS.md order. */
+  quad: Quad;
+  /** Which sampled face of the shot this is: 0 top, 1 left, 2 right. */
+  from: number;
+  /** order[i] is the cell of the sampled face (in the outline's own order) that is cell i of the cube face. */
+  order: number[];
+}
+
+/** The three faces of a corner shot as cube faces for the given view, with their quads in reading order. */
+export function cornerFaceQuads(outline: CornerOutline, view: CornerView): CornerFace[] {
+  const quads = cornerQuads(outline);
+  const map = cornerFaceletMap(view);
+  const cornerOf = (i: number): number => (i === 0 ? 0 : i === 5 ? 1 : i === 35 ? 2 : 3);
+  return [0, 1, 2].map((k) => {
+    const order = new Array<number>(NN);
+    for (let i = 0; i < NN; i++) order[(map[k * NN + i] as number) % NN] = i;
+    const q = quads[k] as Quad;
+    const quad = [0, 5, 35, 30].map((target) => q[cornerOf(order[target] as number)]) as Quad;
+    return { face: Math.floor((map[k * NN] as number) / NN), quad, from: k, order };
+  });
+}
+
+/**
+ * The three faces of a corner shot as straight-on "photos": cube face, quad in reading order and the
+ * sticker samples in reading order. With samples (the camera's merged samples, in the order top, left,
+ * right) those are re-indexed; without, each face is sampled from the image.
+ */
+export function cornerFaces(image: ImageLike, outline: CornerOutline, view: CornerView, samples?: readonly FaceSample[]): { face: number; quad: Quad; sample: FaceSample }[] {
+  return cornerFaceQuads(outline, view).map((f) => {
+    const src = samples && samples.length === 3 ? samples[f.from] : undefined;
+    if (!src) return { face: f.face, quad: f.quad, sample: sampleFace(image, f.quad) };
+    const sample: FaceSample = { rgb: new Float32Array(NN * 3), lab: new Float32Array(NN * 3), quality: new Float32Array(NN) };
+    for (let i = 0; i < NN; i++) {
+      const j = f.order[i] as number;
+      for (let c = 0; c < 3; c++) {
+        sample.rgb[i * 3 + c] = src.rgb[j * 3 + c] as number;
+        sample.lab[i * 3 + c] = src.lab[j * 3 + c] as number;
+      }
+      sample.quality[i] = src.quality[j] as number;
+    }
+    return { face: f.face, quad: f.quad, sample };
+  });
+}
+
 /** The two-photo flow the app can offer: first the URF corner with U on top, then the opposite corner with D on top. */
 export const TWO_SHOT_VIEWS: readonly [CornerView, CornerView] = [
   { top: 0, left: 2, right: 1 },

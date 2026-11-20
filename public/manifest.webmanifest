@@ -1,0 +1,31 @@
+{
+  "name": "6x6 Cube Solver",
+  "short_name": "6x6 Solver",
+  "description": "Scan a 6x6x6 Rubik's Cube with your phone camera and follow a 3D guide, one turn at a time.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#34133e",
+  "theme_color": "#34133e",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

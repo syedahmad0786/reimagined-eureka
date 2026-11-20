@@ -221,7 +221,8 @@ function fit(raw: Float64Array, clip: Uint8Array, weight: Float64Array, seed: Fl
         wsum[k * 3 + c] = (wsum[k * 3 + c] as number) + w * s * s;
       }
     }
-    for (let k = 0; k < K; k++) for (let c = 0; c < 3; c++) centres[k * 3 + c] = (sum[k * 3 + c] as number) / Math.max(1e-9, wsum[k * 3 + c] as number);
+    // A colour nobody holds (possible only while some faces are missing) keeps its centre.
+    for (let k = 0; k < K; k++) for (let c = 0; c < 3; c++) if ((wsum[k * 3 + c] as number) > 1e-9) centres[k * 3 + c] = (sum[k * 3 + c] as number) / (wsum[k * 3 + c] as number);
     if (!compensate) continue;
     // Per-face corrections: what the face's samples have in common after removing their colour centres.
     for (let f = 0; f < K; f++) {
@@ -299,7 +300,7 @@ function priorSeed(priors: readonly ColourPrior[], mean: Float64Array | null): F
 }
 
 /** Seed from the data alone: start at the sample furthest from the mean, then keep taking the sample furthest from the seeds so far. */
-function dataSeed(x: Float64Array, mean: Float64Array): Float64Array {
+function dataSeed(x: Float64Array, mean: Float64Array, weight: Float64Array): Float64Array {
   const seed = new Float64Array(K * 3);
   const dist = (i: number, c: ArrayLike<number>, o: number): number => {
     let d = 0;
@@ -310,6 +311,7 @@ function dataSeed(x: Float64Array, mean: Float64Array): Float64Array {
   let pick = 0;
   let far = -1;
   for (let i = 0; i < N; i++) {
+    if (!(weight[i] as number)) continue;
     const d = dist(i, mean, 0);
     if (d > far) {
       far = d;
@@ -321,6 +323,7 @@ function dataSeed(x: Float64Array, mean: Float64Array): Float64Array {
     far = -1;
     let next = 0;
     for (let i = 0; i < N; i++) {
+      if (!(weight[i] as number)) continue;
       nearest[i] = Math.min(nearest[i] as number, dist(i, seed, k * 3));
       if ((nearest[i] as number) > far) {
         far = nearest[i] as number;
@@ -341,8 +344,12 @@ const PERMS: number[][] = [];
   rest.forEach((v, i) => build([...p, v], [...rest.slice(0, i), ...rest.slice(i + 1)]));
 })([], [0, 1, 2, 3, 4, 5]);
 
-/** Names the six centres and picks screen colours for them. */
-function describe(centres: Float64Array): { names: ColourName[]; palette: string[] } {
+/**
+ * Names the six centres and picks screen colours for them. asSeen (provisional readings of a few faces,
+ * where the names are still guesses): the colours are what the camera saw with the exposure evened
+ * out, not pulled toward the named shade and not pushed apart.
+ */
+function describe(centres: Float64Array, asSeen = false): { names: ColourName[]; palette: string[] } {
   let best: number[] = PERMS[0] as number[];
   let bestCost = Infinity;
   let bestSet = 0;
@@ -382,7 +389,7 @@ function describe(centres: Float64Array): { names: ColourName[]; palette: string
     const gain = Math.min(4, 235 / top);
     rgb = [Math.max(0, rgb[0] * gain), Math.max(0, rgb[1] * gain), Math.max(0, rgb[2] * gain)];
     const seen = rgbToLab(Math.min(255, rgb[0]), Math.min(255, rgb[1]), Math.min(255, rgb[2]));
-    if (named) {
+    if (named && !asSeen) {
       const want = rgbToLab(prior.display[0], prior.display[1], prior.display[2]);
       labs.push([(seen[0] + want[0]) / 2, (seen[1] + want[1]) / 2, (seen[2] + want[2]) / 2]);
     } else {
@@ -390,7 +397,7 @@ function describe(centres: Float64Array): { names: ColourName[]; palette: string
     }
   }
   // Push apart any two screen colours that would be hard to tell apart.
-  for (let round = 0; round < 20; round++) {
+  for (let round = 0; round < (asSeen ? 0 : 20); round++) {
     let moved = false;
     for (let a = 0; a < K; a++)
       for (let b = a + 1; b < K; b++) {
@@ -425,13 +432,25 @@ export interface ClassifyOptions {
 /** Six faces in U R F D L B order, each row-major as read in CONVENTIONS.md. */
 export function classifyCube(faces: readonly FaceSample[], options: ClassifyOptions = {}): Classification {
   if (faces.length !== K) throw new Error('classifyCube needs six faces, got ' + faces.length);
+  return classifyFaces(faces, options);
+}
+
+/**
+ * The fit behind classifyCube and classifyPartial. A missing face (null) contributes 36 samples of
+ * weight zero that cost nothing wherever they go, so the rule "36 stickers per colour" becomes "at
+ * most 36 per colour" for the faces that are there, and the same code serves both cases.
+ */
+function classifyFaces(faces: readonly (FaceSample | null)[], options: ClassifyOptions): Classification {
   const x = new Float64Array(N * 3);
   const weight = new Float64Array(N);
   const clip = new Uint8Array(N);
   const mean = new Float64Array(3);
   let wsum = 0;
+  let present = 0;
   for (let f = 0; f < K; f++) {
-    const face = faces[f] as FaceSample;
+    const face = faces[f];
+    if (!face) continue;
+    present++;
     if (face.rgb.length < PER_FACE * 3) throw new Error('face ' + f + ' has no 36 samples');
     for (let cell = 0; cell < PER_FACE; cell++) {
       const i = f * PER_FACE + cell;
@@ -446,14 +465,18 @@ export function classifyCube(faces: readonly FaceSample[], options: ClassifyOpti
       wsum += 1;
     }
   }
+  if (!present) throw new Error('no face to classify');
   for (let c = 0; c < 3; c++) mean[c] = (mean[c] as number) / wsum;
+  const complete = present === K;
   const compensate = options.compensate !== false;
   const seeds: Float64Array[] = [];
   for (const priors of COLOUR_PRIORS) {
+    // The mean of all samples says how the light is shifted when every colour is present equally often:
+    // exact for a whole cube, a rough guess for a few faces, and the fit keeps whichever seed ends best.
     seeds.push(priorSeed(priors, mean));
     seeds.push(priorSeed(priors, null));
   }
-  seeds.push(dataSeed(x, mean));
+  seeds.push(dataSeed(x, mean, weight));
   let best: Fit | null = null;
   for (const seed of seeds) {
     const f = fit(x, clip, weight, seed, compensate);
@@ -461,14 +484,15 @@ export function classifyCube(faces: readonly FaceSample[], options: ClassifyOpti
   }
   const result = best as Fit;
   // Costs relative to the typical distance of a sample to its own centre.
-  const own = new Float64Array(N);
   const raw = result.cost;
-  for (let i = 0; i < N; i++) own[i] = raw[i * K + (result.labels[i] as number)] as number;
-  const sortedOwn = Array.from(own).sort((a, b) => a - b);
-  const scale = Math.max(1e-4, (sortedOwn[Math.floor(N * 0.5)] as number) * 2.2);
+  const ownList: number[] = [];
+  for (let i = 0; i < N; i++) if (weight[i] as number) ownList.push(raw[i * K + (result.labels[i] as number)] as number);
+  ownList.sort((a, b) => a - b);
+  const scale = Math.max(1e-4, (ownList[Math.floor(ownList.length * 0.5)] as number) * 2.2);
   const costs = new Float32Array(N * K);
   const confidence = new Float32Array(N);
   for (let i = 0; i < N; i++) {
+    if (!(weight[i] as number)) continue;
     let total = 0;
     for (let k = 0; k < K; k++) {
       costs[i * K + k] = (raw[i * K + k] as number) / scale;
@@ -480,6 +504,44 @@ export function classifyCube(faces: readonly FaceSample[], options: ClassifyOpti
     // A sample that is mostly glare or mixed pixels cannot be trusted whatever it looks like.
     confidence[i] = Math.max(0, Math.min(1, (total > 0 ? mine / total : 0) * fitTerm * Math.min(1, 0.1 + 1.8 * q)));
   }
-  const { names, palette } = describe(result.centres);
+  const { names, palette } = describe(result.centres, !complete);
   return { labels: result.labels, confidence, costs, palette, names };
+}
+
+/** A sticker is shown as "unsure" when its confidence is below this. See docs/vision-report.md (Version 2) for what the flag catches. */
+export const UNSURE_BELOW = 0.7;
+
+export interface PartialFace {
+  /** 36 colour group ids 0..5, row-major. Stickers with the same id were read as the same colour. */
+  groups: Uint8Array;
+  /** 36 values 0..1. */
+  confidence: Float32Array;
+}
+
+export interface PartialClassification {
+  /** One entry per slot given: null where no face was given. */
+  faces: (PartialFace | null)[];
+  /** CSS colour per group id. */
+  palette: string[];
+  /** Best-guess name per group id. */
+  names: ColourName[];
+  /** All six faces were given: the groups are exactly the labels of classifyCube. */
+  complete: boolean;
+}
+
+/**
+ * Provisional reading of the faces captured so far: six slots in U R F D L B order, null for a face
+ * that has not been captured. With one face it can only group stickers that look alike; every further
+ * face steadies the lighting correction and the colour centres; with all six it is classifyCube.
+ */
+export function classifyPartial(faces: readonly (FaceSample | null)[], options: ClassifyOptions = {}): PartialClassification {
+  if (faces.length !== K) throw new Error('classifyPartial needs six slots (null for a missing face), got ' + faces.length);
+  const out: (PartialFace | null)[] = [null, null, null, null, null, null];
+  if (!faces.some(Boolean)) return { faces: out, palette: COLOUR_PRIORS[0]!.map((p) => rgbToCss(p.display[0], p.display[1], p.display[2])), names: COLOUR_PRIORS[0]!.map((p) => p.name), complete: false };
+  const result = classifyFaces(faces, options);
+  for (let f = 0; f < K; f++) {
+    if (!faces[f]) continue;
+    out[f] = { groups: result.labels.slice(f * PER_FACE, (f + 1) * PER_FACE), confidence: result.confidence.slice(f * PER_FACE, (f + 1) * PER_FACE) };
+  }
+  return { faces: out, palette: result.palette, names: result.names, complete: faces.every(Boolean) };
 }

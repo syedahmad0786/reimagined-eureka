@@ -29,6 +29,8 @@ export interface MoveIndicator {
   arrows: ArrowInfo[];
   /** Where a "180 degrees" badge can sit: a point on an arrow and the outward normal there. */
   badgeAnchors: { point: THREE.Vector3; normal: THREE.Vector3; cap: boolean }[];
+  /** Where the layer-number pill can sit: the tail of each arrow that runs round the block. */
+  layerAnchors: { point: THREE.Vector3; normal: THREE.Vector3 }[];
   setOpacity(opacity: number): void;
   dispose(): void;
 }
@@ -174,6 +176,7 @@ export function buildMoveIndicator(move: Move, colours: IndicatorColours): MoveI
   const geometries: THREE.BufferGeometry[] = [];
   const arrows: ArrowInfo[] = [];
   const badgeAnchors: MoveIndicator['badgeAnchors'] = [];
+  const layerAnchors: MoveIndicator['layerAnchors'] = [];
 
   const addArrow = (
     length: number,
@@ -234,6 +237,7 @@ export function buildMoveIndicator(move: Move, colours: IndicatorColours): MoveI
       return new THREE.Vector3().addScaledVector(eu, p.nu).addScaledVector(ev, p.nv);
     };
     addArrow(length, shaftHalf, headHalf, headLength, centre, () => ea, normal, sampleRange, 'ring');
+    layerAnchors.push({ point: centre(0.05, 0), normal: normal(0.05) });
     if (heads === 2) {
       // On the shaft: in the middle of the side it crosses, or just behind the heads.
       for (const at of [length / 2, length - 1.75 * headLength - 0.75]) badgeAnchors.push({ point: centre(at, 0), normal: normal(at), cap: false });
@@ -293,6 +297,7 @@ export function buildMoveIndicator(move: Move, colours: IndicatorColours): MoveI
     group,
     arrows,
     badgeAnchors,
+    layerAnchors,
     setOpacity(opacity: number) {
       fill.opacity = edge.opacity = outline.opacity = opacity;
     },

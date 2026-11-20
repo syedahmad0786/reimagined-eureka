@@ -54,6 +54,11 @@ export const NEIGHBOURS: number[][] = [
   [U, L, D, R],
 ];
 
+export const PHASE_ORDER: Phase[] = ['centres', 'edges', 'parity', '3x3'];
+export const PHASE_SHORT: Record<Phase, string> = { centres: 'Centres', edges: 'Edges', parity: 'Parity', '3x3': '3x3' };
+/** The Learn topic that goes with each phase. */
+export const PHASE_TOPIC: Record<Phase, string> = { centres: 'centres', edges: 'edges', parity: 'parity', '3x3': 'three' };
+
 export const PHASE_TITLES: Record<Phase, string> = {
   centres: 'Centres',
   edges: 'Edge pairing',
@@ -63,7 +68,7 @@ export const PHASE_TITLES: Record<Phase, string> = {
 
 const FACE_WORD: Record<string, string> = { R: 'right', L: 'left', U: 'top', D: 'bottom', F: 'front', B: 'back' };
 
-export function moveInWords(m: Move): { what: string; how: string } {
+export function moveInWords(m: Move): { what: string; how: string; kind: string } {
   const d = describeMove(m);
   const face = FACE_WORD[d.face] as string;
   let what: string;
@@ -71,8 +76,10 @@ export function moveInWords(m: Move): { what: string; how: string } {
   else if (d.fromLayer === 1) what = 'The ' + d.toLayer + ' outer layers on the ' + face + ', together';
   else if (d.fromLayer === d.toLayer) what = 'Only layer ' + d.fromLayer + ' counted from the ' + face + ' (an inner slice)';
   else what = 'Layers ' + d.fromLayer + ' to ' + d.toLayer + ' counted from the ' + face + ', together (inner slices)';
-  const how = d.clockwise === 2 ? 'Half turn (180\u00b0)' : 'Quarter turn ' + (d.clockwise === 1 ? 'clockwise' : 'anticlockwise') + ', looking at the ' + face + ' face';
-  return { what, how };
+  // The direction is the thing most easily got wrong, so it sits beside the notation in large type.
+  const kind = d.clockwise === 2 ? 'Half turn' : 'Quarter turn ' + (d.clockwise === 1 ? 'clockwise' : 'anticlockwise');
+  const how = d.clockwise === 2 ? 'Either way round ends in the same place.' : 'Judge the direction looking at the ' + face + ' side.';
+  return { what, how, kind };
 }
 
 /** Colours of the top-right-front corner: [on top, facing you, on the right]. */
@@ -97,11 +104,13 @@ export interface Saved {
   names: string[];
   step: number;
   total: number;
+  /** Time spent on the guided solve so far, in milliseconds. */
+  ms?: number;
 }
 
-export function saveProgress(data: CubeData, step: number, total: number): void {
+export function saveProgress(data: CubeData, step: number, total: number, ms = 0): void {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify({ state: Array.from(data.state), palette: data.palette, names: data.names, step, total } satisfies Saved));
+    localStorage.setItem(STORE_KEY, JSON.stringify({ state: Array.from(data.state), palette: data.palette, names: data.names, step, total, ms } satisfies Saved));
   } catch {
     // Private mode or a full store: the solve still works, it just cannot be resumed.
   }
